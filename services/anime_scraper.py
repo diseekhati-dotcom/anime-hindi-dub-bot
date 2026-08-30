@@ -91,14 +91,14 @@ class AnimeScraper:
             return anime_info
             
         except requests.exceptions.Timeout:
-            logger.warning(f"Request timeout for anime: {anime_name} (Attempt {attempt + 1})")
+            logger.warning(f"Request timeout for anime: {anime_name} (Attempt {attempt + 1}/{MAX_RETRIES + 1})")
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY)
                 return self._fetch_with_retry(anime_name, attempt + 1)
             return None
             
         except requests.exceptions.ConnectionError:
-            logger.warning(f"Connection error for anime: {anime_name} (Attempt {attempt + 1})")
+            logger.warning(f"Connection error for anime: {anime_name} (Attempt {attempt + 1}/{MAX_RETRIES + 1})")
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY)
                 return self._fetch_with_retry(anime_name, attempt + 1)
@@ -120,24 +120,32 @@ class AnimeScraper:
             Dictionary with parsed anime information or None
         """
         try:
-            soup = BeautifulSoup(html_content, 'html.parser')
+            # Use lxml parser for better HTML parsing
+            soup = BeautifulSoup(html_content, 'lxml')
             
             # Look for article/post containers that match the anime name
             articles = soup.find_all(['article', 'div'], class_=lambda x: x and 'post' in x.lower())
             
+            if not articles:
+                logger.debug(f"No article elements found for: {anime_name}")
+                return None
+            
             for article in articles:
                 # Extract title
-                title_elem = article.find(['h1', 'h2', 'h3', '.entry-title', 'a'])
+                title_elem = article.find(['h1', 'h2', 'h3', 'a'])
                 if not title_elem:
                     continue
                     
                 title = title_elem.get_text(strip=True)
                 
+                if not title:
+                    continue
+                
                 # Check if title matches the search term (loose matching)
                 if self._is_matching_title(title, anime_name):
                     # Extract link
                     link_elem = article.find('a', href=True)
-                    link = link_elem['href'] if link_elem else None
+                    link = link_elem.get('href') if link_elem else None
                     
                     # Extract content for Hindi dub and platform info
                     content = article.get_text(strip=True)
@@ -150,6 +158,7 @@ class AnimeScraper:
                         'source_link': link
                     }
                     
+                    logger.debug(f"Found anime: {title} with dub: {anime_info['hindi_dub']}")
                     return anime_info
             
             logger.debug(f"No matching results found for: {anime_name}")
@@ -171,13 +180,16 @@ class AnimeScraper:
         Returns:
             True if titles match
         """
+        if not title or not search_term:
+            return False
+            
         title_lower = title.lower().strip()
         search_lower = search_term.lower().strip()
         
         # Exact or partial match
         return (search_lower in title_lower or 
                 title_lower.startswith(search_lower) or
-                all(word in title_lower for word in search_lower.split()))
+                all(word in title_lower for word in search_lower.split() if word))
 
     @staticmethod
     def _extract_hindi_dub_status(content: str) -> str:
@@ -188,22 +200,27 @@ class AnimeScraper:
             content: Article content
             
         Returns:
-            "Available" or "Not Available"
+            "Available" or "Not Available" or "Status Unknown"
         """
+        if not content:
+            return "Status Unknown"
+            
         content_lower = content.lower()
         
         # Check for Hindi dub indicators
-        hindi_indicators = ['hindi dub', 'hindi dubbed', 'hindi version']
-        not_available_indicators = ['not available', 'unavailable', 'no hindi', 'without hindi']
+        hindi_indicators = ['hindi dub', 'hindi dubbed', 'hindi version', 'hindi audio']
+        not_available_indicators = ['not available', 'unavailable', 'no hindi', 'without hindi', 'hindi dub not available']
         
         # Check for negative indicators first
         for indicator in not_available_indicators:
             if indicator in content_lower:
+                logger.debug(f"Found negative indicator: {indicator}")
                 return "Not Available"
         
         # Check for positive indicators
         for indicator in hindi_indicators:
             if indicator in content_lower:
+                logger.debug(f"Found positive indicator: {indicator}")
                 return "Available"
         
         # Default: Unknown/Not mentioned
@@ -220,6 +237,9 @@ class AnimeScraper:
         Returns:
             Platform name or None
         """
+        if not content:
+            return None
+            
         content_lower = content.lower()
         
         platforms = {
@@ -227,7 +247,7 @@ class AnimeScraper:
             'Amazon Prime Video': ['amazon prime', 'prime video'],
             'Crunchyroll': ['crunchyroll'],
             'Disney+': ['disney+', 'disney plus'],
-            'Hotstar': ['hotstar', 'disney hotstar'],
+            'Disney Hotstar': ['hotstar', 'disney hotstar'],
             'MX Player': ['mx player'],
             'ZEE5': ['zee5'],
             'SonyLiv': ['sony liv', 'sonyliv'],
@@ -236,6 +256,7 @@ class AnimeScraper:
         for platform, keywords in platforms.items():
             for keyword in keywords:
                 if keyword in content_lower:
+                    logger.debug(f"Found platform: {platform}")
                     return platform
         
         return None
@@ -251,13 +272,18 @@ class AnimeScraper:
         Returns:
             "Available" or "Not Available" or None (if not mentioned)
         """
+        if not content:
+            return None
+            
         content_lower = content.lower()
         
         # Look for English dub information
         if 'english dub' in content_lower or 'english dubbed' in content_lower:
             if 'not available' not in content_lower and 'unavailable' not in content_lower:
+                logger.debug("Found English dub available")
                 return "Available"
             else:
+                logger.debug("Found English dub not available")
                 return "Not Available"
         
         # If not mentioned, return None
