@@ -1,13 +1,11 @@
 """
 Anime information service.
 
-This version does NOT depend on Anime Mirchi's search page,
-because Render requests can receive HTTP 403.
+Sources:
+- Anime Mirchi: manually verified information
+- AnimeDubHindi: information-only metadata
 
-It uses a small verified local database for known anime and
-returns the Anime Mirchi article as the source.
-
-No anime episodes/files are downloaded or stored.
+The bot does NOT download, store, or distribute anime episodes/files.
 """
 
 from typing import Dict, Optional
@@ -17,10 +15,11 @@ from utils.logger import logger
 
 
 # -------------------------------------------------------------------
-# VERIFIED ANIME DATA
+# ANIME INFORMATION DATABASE
 # -------------------------------------------------------------------
 
 ANIME_DATABASE: Dict[str, Dict] = {
+
     "naruto": {
         "name": "Naruto",
         "hindi_dub": "Available",
@@ -33,6 +32,7 @@ ANIME_DATABASE: Dict[str, Dict] = {
             "Sony YAY! — original series ke 220 episodes Hindi me aired hue."
         ),
         "episodes": "220",
+        "source": "Anime Mirchi",
         "source_link": (
             "https://animemirchi.com/"
             "naruto-all-episodes-hindi-tamil-telugu-crunchyroll/"
@@ -44,25 +44,59 @@ ANIME_DATABASE: Dict[str, Dict] = {
         "hindi_dub": "Available",
         "platform": "Crunchyroll India",
         "hindi_details": (
-            "Season 1 aur Season 2 dono Hindi dub me Crunchyroll India "
-            "par available hain."
+            "Season 1 aur Season 2 Hindi dub me available hain."
         ),
         "original_broadcast": None,
         "episodes": "25",
+        "source": "Anime Mirchi",
         "source_link": (
             "https://animemirchi.com/solo-leveling-in-india/"
+        ),
+    },
+
+    # ---------------------------------------------------------------
+    # AnimeDubHindi information source
+    # ---------------------------------------------------------------
+
+    "mushoku tensei": {
+        "name": "Mushoku Tensei: Jobless Reincarnation",
+        "hindi_dub": "Available",
+        "platform": "Muse India",
+        "hindi_details": (
+            "AnimeDubHindi schedule ke mutabik Season 3 ke liye "
+            "Hindi, English aur Japanese audio listed hai."
+        ),
+        "original_broadcast": None,
+        "episodes": None,
+        "season": "Season 3",
+        "languages": "Hindi • English • Japanese",
+        "release_date": "30 Aug 2026",
+        "source": "AnimeDubHindi",
+        "source_link": (
+            "https://www.animedubhindi.link/schedule.php"
         ),
     },
 }
 
 
-# Alternative names
+# -------------------------------------------------------------------
+# ALTERNATIVE TITLES
+# -------------------------------------------------------------------
+
 ALIASES = {
+
     "naruto uzumaki": "naruto",
     "naruto series": "naruto",
     "naruto 2002": "naruto",
+
     "solo leveling anime": "solo leveling",
     "solo-leveling": "solo leveling",
+
+    "mushoku tensei anime": "mushoku tensei",
+    "mushoku tensei jobless reincarnation":
+        "mushoku tensei",
+    "jobless reincarnation":
+        "mushoku tensei",
 }
 
 
@@ -70,12 +104,12 @@ class AnimeScraper:
     """
     Anime information lookup service.
 
-    Despite the old class name, this version is intentionally NOT
-    scraping Anime Mirchi search results.
+    This intentionally does not scrape download/watch links.
     """
 
     def __init__(self):
         self.session = requests.Session()
+
         self.session.headers.update(
             {
                 "User-Agent": (
@@ -85,7 +119,10 @@ class AnimeScraper:
             }
         )
 
-    def search_anime(self, anime_name: str) -> Optional[Dict]:
+    def search_anime(
+        self,
+        anime_name: str
+    ) -> Optional[Dict]:
         """Find anime information by title."""
 
         if not anime_name:
@@ -93,20 +130,33 @@ class AnimeScraper:
 
         query = self._normalize(anime_name)
 
-        logger.info("Anime lookup: %s", query)
+        logger.info(
+            "Anime lookup: %s",
+            query
+        )
 
-        # Check alias first
-        query = ALIASES.get(query, query)
+        # Check aliases
+        query = ALIASES.get(
+            query,
+            query
+        )
 
+        # Search local verified information
         if query not in ANIME_DATABASE:
-            logger.info("Anime not found in local database: %s", query)
+
+            logger.info(
+                "Anime not found in local database: %s",
+                query
+            )
+
             return None
 
         info = ANIME_DATABASE[query].copy()
 
-        # Try to obtain a poster URL.
-        # If this fails, the bot still sends the text information.
-        info["poster_url"] = self._get_poster(info["name"])
+        # Poster
+        info["poster_url"] = self._get_poster(
+            info["name"]
+        )
 
         return info
 
@@ -115,17 +165,25 @@ class AnimeScraper:
         """Normalize search text."""
 
         return " ".join(
-            text.lower().strip().replace("-", " ").split()
+            text.lower()
+            .strip()
+            .replace("-", " ")
+            .split()
         )
 
-    def _get_poster(self, anime_name: str) -> Optional[str]:
+    def _get_poster(
+        self,
+        anime_name: str
+    ) -> Optional[str]:
         """
-        Get anime poster from Jikan's public metadata API.
+        Get anime poster from Jikan metadata API.
 
-        No poster is downloaded or stored by this bot.
+        Only the poster URL is used.
+        Anime episodes/files are not downloaded.
         """
 
         try:
+
             response = self.session.get(
                 "https://api.jikan.moe/v4/anime",
                 params={
@@ -137,31 +195,52 @@ class AnimeScraper:
 
             response.raise_for_status()
 
-            data = response.json().get("data", [])
+            data = response.json().get(
+                "data",
+                []
+            )
 
             if not data:
                 return None
 
-            images = data[0].get("images", {})
-            jpg = images.get("jpg", {})
+            images = data[0].get(
+                "images",
+                {}
+            )
 
-            return jpg.get("large_image_url") or jpg.get(
-                "image_url"
+            jpg = images.get(
+                "jpg",
+                {}
+            )
+
+            return (
+                jpg.get("large_image_url")
+                or jpg.get("image_url")
             )
 
         except Exception as exc:
+
             logger.warning(
                 "Could not fetch poster for %s: %s",
                 anime_name,
                 exc,
             )
+
             return None
 
+
+# -------------------------------------------------------------------
+# SINGLE SCRAPER INSTANCE
+# -------------------------------------------------------------------
 
 anime_scraper = AnimeScraper()
 
 
-def get_anime_info(anime_name: str) -> Optional[Dict]:
+def get_anime_info(
+    anime_name: str
+) -> Optional[Dict]:
     """Public helper used by the Telegram command handler."""
 
-    return anime_scraper.search_anime(anime_name)
+    return anime_scraper.search_anime(
+        anime_name
+    )
