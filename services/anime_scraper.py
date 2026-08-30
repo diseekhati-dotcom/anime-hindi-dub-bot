@@ -21,8 +21,10 @@ RETRY_DELAY,
 from utils.logger import logger
 
 class AnimeScraper:
-"""Scraper for publicly available Anime Mirchi information."""
+    """Scraper for publicly available Anime Mirchi information."""
 
+    def __init__(self):
+        self.base_url = ANIME_MIRCHI_BASE_URL.rstrip("/")
 def __init__(self):
     self.base_url = ANIME_MIRCHI_BASE_URL.rstrip("/")
     self.search_url = ANIME_MIRCHI_SEARCH_URL
