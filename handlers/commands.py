@@ -2,10 +2,10 @@
 Anime information service.
 
 Uses AnimeDubHindi schedule for anime metadata
-and Jikan for anime poster information.
+and Jikan API for anime posters.
 
-No anime episodes or copyrighted files are downloaded,
-stored, or distributed.
+This bot only provides anime information.
+It does not download, store, or distribute anime episodes/files.
 """
 
 import re
@@ -34,7 +34,8 @@ class AnimeScraper:
         self.session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
                 "Chrome/120.0 Safari/537.36"
             ),
             "Accept-Language": "en-US,en;q=0.9",
@@ -48,7 +49,6 @@ class AnimeScraper:
         self,
         anime_name: str
     ) -> Optional[Dict]:
-        """Search AnimeDubHindi schedule."""
 
         if not anime_name or not anime_name.strip():
             return None
@@ -56,7 +56,7 @@ class AnimeScraper:
         query = self._normalize(anime_name)
 
         logger.info(
-            "Anime search: %s",
+            "Searching anime: %s",
             query
         )
 
@@ -85,10 +85,7 @@ class AnimeScraper:
                 )
                 return None
 
-            # --------------------------------------------------------
-            # POSTER
-            # --------------------------------------------------------
-
+            # Get poster from Jikan
             result["poster_url"] = self._get_poster(
                 result["name"]
             )
@@ -98,7 +95,7 @@ class AnimeScraper:
         except requests.RequestException as exc:
 
             logger.error(
-                "AnimeDubHindi request failed: %s",
+                "AnimeDubHindi request error: %s",
                 exc
             )
 
@@ -107,7 +104,7 @@ class AnimeScraper:
         except Exception as exc:
 
             logger.error(
-                "Anime search error: %s",
+                "Anime scraper error: %s",
                 exc,
                 exc_info=True
             )
@@ -123,9 +120,7 @@ class AnimeScraper:
         soup: BeautifulSoup,
         query: str
     ) -> Optional[Dict]:
-        """Find matching anime from schedule page."""
 
-        # Look through common title elements.
         elements = soup.find_all(
             ["h1", "h2", "h3", "h4", "h5", "a"]
         )
@@ -140,7 +135,6 @@ class AnimeScraper:
             if not title:
                 continue
 
-            # Ignore very long page text.
             if len(title) > 150:
                 continue
 
@@ -150,7 +144,7 @@ class AnimeScraper:
             ):
                 continue
 
-            # Find useful surrounding container.
+            # Find surrounding information
             container = element
 
             for _ in range(6):
@@ -166,14 +160,12 @@ class AnimeScraper:
                 )
 
                 if (
-                    len(text) > len(title)
-                    and (
-                        "Hindi" in text
-                        or "English" in text
-                        or "Japanese" in text
-                        or "Season" in text
-                        or "EP" in text
-                    )
+                    "Hindi" in text
+                    or "English" in text
+                    or "Japanese" in text
+                    or "Season" in text
+                    or "Episode" in text
+                    or "EP" in text
                 ):
                     break
 
@@ -182,12 +174,14 @@ class AnimeScraper:
                 strip=True
             )
 
-            # Don't use an entire page as a result.
+            # Prevent accidentally reading entire webpage
             if len(text) > 2500:
-                text = element.parent.get_text(
-                    " ",
-                    strip=True
-                )
+
+                if element.parent:
+                    text = element.parent.get_text(
+                        " ",
+                        strip=True
+                    )
 
             languages = self._extract_languages(
                 text
@@ -237,8 +231,8 @@ class AnimeScraper:
 
                 "source": "AnimeDubHindi",
 
-                # Kept internally but NOT displayed
-                # by commands.py.
+                # Used internally only.
+                # commands.py does not display it.
                 "source_link": SCHEDULE_URL,
             }
 
@@ -252,12 +246,7 @@ class AnimeScraper:
         self,
         anime_name: str
     ) -> Optional[str]:
-        """
-        Get anime poster from Jikan.
-
-        Only the image URL is used.
-        The bot does not download or store the poster.
-        """
+        """Get poster URL from Jikan."""
 
         try:
 
@@ -279,14 +268,12 @@ class AnimeScraper:
 
             if not data:
                 logger.warning(
-                    "No poster result for: %s",
+                    "Poster not found: %s",
                     anime_name
                 )
                 return None
 
-            anime = data[0]
-
-            images = anime.get(
+            images = data[0].get(
                 "images",
                 {}
             )
@@ -296,23 +283,17 @@ class AnimeScraper:
                 {}
             )
 
-            poster = (
+            poster_url = (
                 jpg.get("large_image_url")
                 or jpg.get("image_url")
             )
 
-            if poster:
-                logger.info(
-                    "Poster found for: %s",
-                    anime_name
-                )
-
-            return poster
+            return poster_url
 
         except Exception as exc:
 
             logger.warning(
-                "Poster fetch failed for %s: %s",
+                "Poster error for %s: %s",
                 anime_name,
                 exc
             )
@@ -320,14 +301,13 @@ class AnimeScraper:
             return None
 
     # ----------------------------------------------------------------
-    # NORMALIZATION
+    # NORMALIZE
     # ----------------------------------------------------------------
 
     @staticmethod
     def _normalize(
         text: str
     ) -> str:
-        """Normalize anime title."""
 
         text = text.lower()
 
@@ -347,7 +327,7 @@ class AnimeScraper:
         )
 
     # ----------------------------------------------------------------
-    # TITLE MATCHING
+    # TITLE MATCH
     # ----------------------------------------------------------------
 
     @staticmethod
@@ -355,7 +335,6 @@ class AnimeScraper:
         title: str,
         query: str
     ) -> bool:
-        """Check if title matches search query."""
 
         normalized_title = (
             AnimeScraper._normalize(title)
@@ -368,15 +347,12 @@ class AnimeScraper:
         if not normalized_query:
             return False
 
-        # Exact match
         if normalized_title == normalized_query:
             return True
 
-        # Query contained in title
         if normalized_query in normalized_title:
             return True
 
-        # Every query word exists in title
         query_words = set(
             normalized_query.split()
         )
@@ -390,14 +366,13 @@ class AnimeScraper:
         )
 
     # ----------------------------------------------------------------
-    # TITLE CLEANING
+    # CLEAN TITLE
     # ----------------------------------------------------------------
 
     @staticmethod
     def _clean_title(
         title: str
     ) -> str:
-        """Clean common title noise."""
 
         title = re.sub(
             r"\s+[-|–]\s+AnimeDubHindi.*$",
@@ -416,7 +391,6 @@ class AnimeScraper:
     def _extract_season(
         text: str
     ) -> Optional[str]:
-        """Extract season number."""
 
         match = re.search(
             r"\bSeason\s*([0-9]+)\b",
@@ -450,7 +424,6 @@ class AnimeScraper:
     def _extract_episode(
         text: str
     ) -> Optional[str]:
-        """Extract episode number."""
 
         patterns = [
             r"\bEP\s*([0-9]+(?:-[0-9]+)?)\b",
@@ -478,9 +451,8 @@ class AnimeScraper:
     def _extract_languages(
         text: str
     ) -> list:
-        """Extract listed audio languages."""
 
-        languages = [
+        possible_languages = [
             "Hindi",
             "Tamil",
             "Telugu",
@@ -490,7 +462,7 @@ class AnimeScraper:
 
         found = []
 
-        for language in languages:
+        for language in possible_languages:
 
             if re.search(
                 rf"\b{re.escape(language)}\b",
@@ -509,7 +481,6 @@ class AnimeScraper:
     def _extract_schedule(
         text: str
     ) -> Optional[str]:
-        """Extract day and time."""
 
         days = [
             "Monday",
@@ -548,7 +519,6 @@ class AnimeScraper:
     def _extract_date(
         text: str
     ) -> Optional[str]:
-        """Extract common date formats."""
 
         patterns = [
             r"\b\d{1,2}\s+"
