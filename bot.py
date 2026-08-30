@@ -1,17 +1,13 @@
 """
 Anime Hindi Dub Bot - Main Entry Point
-Telegram bot providing information about Hindi-dubbed anime
+Telegram bot providing information about Hindi-dubbed anime.
 """
 
-import logging
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from telegram.ext import (
-Application,
-CommandHandler,
-)
+from telegram.ext import Application, CommandHandler
 
 from config import TELEGRAM_BOT_TOKEN
 from handlers.commands import (
@@ -23,28 +19,31 @@ from handlers.errors import error_handler
 from utils.logger import logger
 
 class HealthHandler(BaseHTTPRequestHandler):
-"""Simple HTTP health-check endpoint for Render."""
+"""HTTP health endpoint for Render."""
 
 def do_GET(self):
-    if self.path == "/" or self.path == "/health":
+    if self.path in ("/", "/health"):
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"Anime Hindi Dub Bot is running!")
+        self.wfile.write(b"OK")
     else:
         self.send_response(404)
         self.end_headers()
 
 def log_message(self, format, *args):
-    # Keep health-check requests out of the normal HTTP log.
-    return
+    # Don't print UptimeRobot/health-check requests.
+    pass
 
-def start_health_server() -> None:
-"""Start the HTTP health server in a background thread."""
+def start_health_server():
+"""Start the Render health server in the background."""
 
 port = int(os.environ.get("PORT", "10000"))
 
-server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+server = ThreadingHTTPServer(
+    ("0.0.0.0", port),
+    HealthHandler,
+)
 
 thread = threading.Thread(
     target=server.serve_forever,
@@ -52,32 +51,27 @@ thread = threading.Thread(
 )
 thread.start()
 
-logger.info(f"Health server started on port {port}")
+logger.info(f"Health server running on port {port}")
 
 def main() -> None:
-"""
-Main function to start the bot.
-Starts the health server and Telegram polling.
-"""
+"""Start the Telegram bot."""
 
 logger.info("=" * 50)
 logger.info("Starting Anime Hindi Dub Bot...")
 logger.info("=" * 50)
 
 try:
-    # Start HTTP health endpoint for Render.
+    # Start HTTP server required by Render Web Service.
     start_health_server()
 
-    # Create the Telegram Application.
+    # Create Telegram application.
     application = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
         .build()
     )
 
-    # Register command handlers.
-    logger.info("Registering command handlers...")
-
+    # Telegram commands.
     application.add_handler(
         CommandHandler("start", start_command)
     )
@@ -90,34 +84,32 @@ try:
         CommandHandler("anime", anime_command)
     )
 
-    # Register error handler.
+    # Error handler.
     application.add_error_handler(error_handler)
 
-    logger.info("Bot initialized successfully")
-    logger.info("Commands registered: /start, /help, /anime")
-    logger.info("=" * 50)
+    logger.info("Bot initialized successfully.")
+    logger.info("Commands: /start, /help, /anime")
+    logger.info("Starting Telegram polling...")
 
-    # Start Telegram polling.
-    logger.info("Starting bot polling...")
-
+    # Start Telegram bot.
     application.run_polling(
         allowed_updates=["message", "edited_message"]
     )
 
 except ValueError as e:
-    logger.critical(f"Configuration error: {str(e)}")
+    logger.critical(f"Configuration error: {e}")
     logger.critical(
-        "Ensure TELEGRAM_BOT_TOKEN is configured "
-        "as an environment variable."
+        "Make sure TELEGRAM_BOT_TOKEN is configured "
+        "in Render Environment Variables."
     )
     raise
 
 except KeyboardInterrupt:
-    logger.info("Bot interrupted by user")
+    logger.info("Bot stopped.")
 
 except Exception as e:
     logger.critical(
-        f"Critical error: {str(e)}",
+        f"Critical error: {e}",
         exc_info=True,
     )
     raise
