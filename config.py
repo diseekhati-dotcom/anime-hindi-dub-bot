@@ -17,7 +17,7 @@ PORT = int(os.getenv('PORT', 8000))
 
 # Anime Mirchi API Configuration
 ANIME_MIRCHI_BASE_URL = 'https://animemirchi.com'
-ANIME_MIRCHI_SEARCH_URL = f'{ANIME_MIRCHI_BASE_URL}/'
+ANIME_MIRCHI_SEARCH_URL = ANIME_MIRCHI_BASE_URL
 
 # Request Configuration
 REQUEST_TIMEOUT = 10  # seconds
