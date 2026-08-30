@@ -1,307 +1,340 @@
 """
 Anime Mirchi Web Scraper Service
-Fetches and parses Hindi-dubbed anime information from Anime Mirchi website
+Fetches Hindi-dubbed anime information from Anime Mirchi.
 """
+
+import re
+import time
+from typing import Dict, Optional
+from urllib.parse import quote, urljoin
 
 import requests
 from bs4 import BeautifulSoup
-from typing import Optional, Dict, List
-import time
 
 from config import (
-    ANIME_MIRCHI_BASE_URL,
-    ANIME_MIRCHI_SEARCH_URL,
-    REQUEST_TIMEOUT,
-    MAX_RETRIES,
-    RETRY_DELAY
+ANIME_MIRCHI_BASE_URL,
+ANIME_MIRCHI_SEARCH_URL,
+REQUEST_TIMEOUT,
+MAX_RETRIES,
+RETRY_DELAY,
 )
 from utils.logger import logger
 
-
 class AnimeScraper:
-    """Scrapes anime information from Anime Mirchi website"""
+"""Scraper for publicly available Anime Mirchi information."""
 
-    def __init__(self):
-        self.base_url = ANIME_MIRCHI_BASE_URL
-        self.search_url = ANIME_MIRCHI_SEARCH_URL
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                         'AppleWebKit/537.36 (KHTML, like Gecko) '
-                         'Chrome/120.0.0.0 Safari/537.36'
-        })
+def __init__(self):
+    self.base_url = ANIME_MIRCHI_BASE_URL.rstrip("/")
+    self.search_url = ANIME_MIRCHI_SEARCH_URL
 
-    def search_anime(self, anime_name: str) -> Optional[Dict]:
-        """
-        Search for anime by name on Anime Mirchi
-        
-        Args:
-            anime_name: Name of the anime to search for
-            
-        Returns:
-            Dictionary with anime information or None if not found
-        """
-        if not anime_name or not anime_name.strip():
-            logger.warning("Empty anime name provided")
-            return None
+    self.session = requests.Session()
+    self.session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+    )
 
-        anime_name = anime_name.strip()
-        logger.info(f"Searching for anime: {anime_name}")
+def search_anime(self, anime_name: str) -> Optional[Dict]:
+    """Search Anime Mirchi and return matching anime information."""
 
+    if not anime_name or not anime_name.strip():
+        return None
+
+    query = anime_name.strip()
+    logger.info("Searching Anime Mirchi for: %s", query)
+
+    html = self._request(
+        self.search_url,
+        params={"s": query},
+    )
+
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # First try normal WordPress search-result links.
+    candidates = []
+
+    for link in soup.find_all("a", href=True):
+        title = link.get_text(" ", strip=True)
+        href = link.get("href", "").strip()
+
+        if not title or not href:
+            continue
+
+        if self._is_matching_title(title, query):
+            candidates.append(
+                {
+                    "title": title,
+                    "url": urljoin(self.base_url + "/", href),
+                }
+            )
+
+    # Remove duplicates.
+    unique = []
+    seen = set()
+
+    for candidate in candidates:
+        url = candidate["url"]
+
+        if url not in seen:
+            seen.add(url)
+            unique.append(candidate)
+
+    if not unique:
+        logger.info("No Anime Mirchi search result found for: %s", query)
+        return None
+
+    # Prefer the closest title match.
+    best = self._choose_best_match(unique, query)
+
+    # Fetch the actual article page.
+    article_html = self._request(best["url"])
+
+    if not article_html:
+        return {
+            "name": best["title"],
+            "hindi_dub": "Status Unknown",
+            "platform": None,
+            "english_dub": None,
+            "episodes": None,
+            "source_link": best["url"],
+        }
+
+    return self._parse_article(
+        article_html,
+        best["title"],
+        best["url"],
+    )
+
+def _request(self, url: str, params=None) -> Optional[str]:
+    """Request a page with retries."""
+
+    for attempt in range(MAX_RETRIES + 1):
         try:
-            # Try to fetch anime information with retry logic
-            anime_info = self._fetch_with_retry(anime_name)
-            
-            if anime_info:
-                logger.info(f"Successfully found anime: {anime_name}")
-                return anime_info
-            else:
-                logger.info(f"Anime not found: {anime_name}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error searching for anime '{anime_name}': {str(e)}")
-            return None
-
-    def _fetch_with_retry(self, anime_name: str, attempt: int = 0) -> Optional[Dict]:
-        """
-        Fetch anime information with retry logic
-        
-        Args:
-            anime_name: Name of anime to fetch
-            attempt: Current attempt number
-            
-        Returns:
-            Dictionary with anime info or None
-        """
-        try:
-            # Construct search URL with anime name as parameter
-            # Anime Mirchi uses search functionality
-            search_params = {'s': anime_name}
-            
             response = self.session.get(
-                self.search_url,
-                params=search_params,
-                timeout=REQUEST_TIMEOUT
+                url,
+                params=params,
+                timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status()
-            
-            # Parse and extract anime information
-            anime_info = self._parse_search_results(response.text, anime_name)
-            return anime_info
-            
-        except requests.exceptions.Timeout:
-            logger.warning(f"Request timeout for anime: {anime_name} (Attempt {attempt + 1}/{MAX_RETRIES + 1})")
+
+            return response.text
+
+        except requests.RequestException as exc:
+            logger.warning(
+                "Request failed (%s/%s): %s",
+                attempt + 1,
+                MAX_RETRIES + 1,
+                exc,
+            )
+
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY)
-                return self._fetch_with_retry(anime_name, attempt + 1)
-            return None
-            
-        except requests.exceptions.ConnectionError:
-            logger.warning(f"Connection error for anime: {anime_name} (Attempt {attempt + 1}/{MAX_RETRIES + 1})")
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY)
-                return self._fetch_with_retry(anime_name, attempt + 1)
-            return None
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request error: {str(e)}")
-            return None
 
-    def _parse_search_results(self, html_content: str, anime_name: str) -> Optional[Dict]:
-        """
-        Parse search results HTML and extract anime information
-        
-        Args:
-            html_content: HTML content from Anime Mirchi
-            anime_name: Original search term
-            
-        Returns:
-            Dictionary with parsed anime information or None
-        """
-        try:
-            # Use lxml parser for better HTML parsing
-            soup = BeautifulSoup(html_content, 'lxml')
-            
-            # Look for article/post containers that match the anime name
-            articles = soup.find_all(['article', 'div'], class_=lambda x: x and 'post' in x.lower())
-            
-            if not articles:
-                logger.debug(f"No article elements found for: {anime_name}")
-                return None
-            
-            for article in articles:
-                # Extract title
-                title_elem = article.find(['h1', 'h2', 'h3', 'a'])
-                if not title_elem:
-                    continue
-                    
-                title = title_elem.get_text(strip=True)
-                
-                if not title:
-                    continue
-                
-                # Check if title matches the search term (loose matching)
-                if self._is_matching_title(title, anime_name):
-                    # Extract link
-                    link_elem = article.find('a', href=True)
-                    link = link_elem.get('href') if link_elem else None
-                    
-                    # Extract content for Hindi dub and platform info
-                    content = article.get_text(strip=True)
-                    
-                    anime_info = {
-                        'name': title,
-                        'hindi_dub': self._extract_hindi_dub_status(content),
-                        'platform': self._extract_platform(content),
-                        'english_dub': self._extract_english_dub_status(content),
-                        'source_link': link
-                    }
-                    
-                    logger.debug(f"Found anime: {title} with dub: {anime_info['hindi_dub']}")
-                    return anime_info
-            
-            logger.debug(f"No matching results found for: {anime_name}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error parsing search results: {str(e)}")
-            return None
+    return None
 
-    @staticmethod
-    def _is_matching_title(title: str, search_term: str) -> bool:
-        """
-        Check if title matches search term (case-insensitive, partial match)
-        
-        Args:
-            title: Title from search results
-            search_term: Original search term
-            
-        Returns:
-            True if titles match
-        """
-        if not title or not search_term:
-            return False
-            
-        title_lower = title.lower().strip()
-        search_lower = search_term.lower().strip()
-        
-        # Exact or partial match
-        return (search_lower in title_lower or 
-                title_lower.startswith(search_lower) or
-                all(word in title_lower for word in search_lower.split() if word))
+def _parse_article(
+    self,
+    html: str,
+    title: str,
+    source_url: str,
+) -> Dict:
+    """Extract information from an Anime Mirchi article."""
 
-    @staticmethod
-    def _extract_hindi_dub_status(content: str) -> str:
-        """
-        Extract Hindi dub availability status from content
-        
-        Args:
-            content: Article content
-            
-        Returns:
-            "Available" or "Not Available" or "Status Unknown"
-        """
-        if not content:
-            return "Status Unknown"
-            
-        content_lower = content.lower()
-        
-        # Check for Hindi dub indicators
-        hindi_indicators = ['hindi dub', 'hindi dubbed', 'hindi version', 'hindi audio']
-        not_available_indicators = ['not available', 'unavailable', 'no hindi', 'without hindi', 'hindi dub not available']
-        
-        # Check for negative indicators first
-        for indicator in not_available_indicators:
-            if indicator in content_lower:
-                logger.debug(f"Found negative indicator: {indicator}")
-                return "Not Available"
-        
-        # Check for positive indicators
-        for indicator in hindi_indicators:
-            if indicator in content_lower:
-                logger.debug(f"Found positive indicator: {indicator}")
-                return "Available"
-        
-        # Default: Unknown/Not mentioned
-        return "Status Unknown"
+    soup = BeautifulSoup(html, "html.parser")
 
-    @staticmethod
-    def _extract_platform(content: str) -> Optional[str]:
-        """
-        Extract platform information from content
-        
-        Args:
-            content: Article content
-            
-        Returns:
-            Platform name or None
-        """
-        if not content:
-            return None
-            
-        content_lower = content.lower()
-        
-        platforms = {
-            'Netflix': ['netflix'],
-            'Amazon Prime Video': ['amazon prime', 'prime video'],
-            'Crunchyroll': ['crunchyroll'],
-            'Disney+': ['disney+', 'disney plus'],
-            'Disney Hotstar': ['hotstar', 'disney hotstar'],
-            'MX Player': ['mx player'],
-            'ZEE5': ['zee5'],
-            'SonyLiv': ['sony liv', 'sonyliv'],
-        }
-        
-        for platform, keywords in platforms.items():
-            for keyword in keywords:
-                if keyword in content_lower:
-                    logger.debug(f"Found platform: {platform}")
-                    return platform
-        
-        return None
+    # Prefer article/main content instead of the whole page.
+    article = (
+        soup.find("article")
+        or soup.find("main")
+        or soup.body
+        or soup
+    )
 
-    @staticmethod
-    def _extract_english_dub_status(content: str) -> Optional[str]:
-        """
-        Extract English dub availability from content
-        
-        Args:
-            content: Article content
-            
-        Returns:
-            "Available" or "Not Available" or None (if not mentioned)
-        """
-        if not content:
-            return None
-            
-        content_lower = content.lower()
-        
-        # Look for English dub information
-        if 'english dub' in content_lower or 'english dubbed' in content_lower:
-            if 'not available' not in content_lower and 'unavailable' not in content_lower:
-                logger.debug("Found English dub available")
-                return "Available"
-            else:
-                logger.debug("Found English dub not available")
-                return "Not Available"
-        
-        # If not mentioned, return None
-        return None
+    text = article.get_text(
+        " ",
+        strip=True,
+    )
 
+    return {
+        "name": self._clean_title(title),
+        "hindi_dub": self._extract_hindi_status(text),
+        "platform": self._extract_platform(text),
+        "english_dub": self._extract_english_status(text),
+        "episodes": self._extract_episodes(text),
+        "source_link": source_url,
+    }
 
-# Create a singleton instance
+@staticmethod
+def _clean_title(title: str) -> str:
+    """Clean common search-result title noise."""
+
+    title = re.sub(
+        r"\s+[-|–]\s+Anime Mirchi.*$",
+        "",
+        title,
+        flags=re.I,
+    )
+
+    return title.strip()
+
+@staticmethod
+def _is_matching_title(title: str, query: str) -> bool:
+    """Check whether a search result is relevant."""
+
+    title_words = set(
+        re.findall(r"[a-z0-9]+", title.lower())
+    )
+    query_words = set(
+        re.findall(r"[a-z0-9]+", query.lower())
+    )
+
+    if not query_words:
+        return False
+
+    title_lower = title.lower()
+    query_lower = query.lower()
+
+    if query_lower in title_lower:
+        return True
+
+    # All query words should occur in the title.
+    return query_words.issubset(title_words)
+
+@staticmethod
+def _choose_best_match(
+    candidates,
+    query: str,
+) -> Dict:
+    """Choose the closest title match."""
+
+    query_lower = query.lower().strip()
+
+    # Exact title match first.
+    for item in candidates:
+        if item["title"].lower().strip() == query_lower:
+            return item
+
+    # Then title beginning with the query.
+    for item in candidates:
+        if item["title"].lower().startswith(query_lower):
+            return item
+
+    return candidates[0]
+
+@staticmethod
+def _extract_hindi_status(text: str) -> str:
+    """Detect Hindi-dub information."""
+
+    lower = text.lower()
+
+    negative_patterns = (
+        "hindi dub not available",
+        "hindi dubbed not available",
+        "no hindi dub",
+        "without hindi dub",
+        "hindi audio not available",
+        "not available in hindi",
+    )
+
+    for pattern in negative_patterns:
+        if pattern in lower:
+            return "Not Available"
+
+    positive_patterns = (
+        "hindi dub",
+        "hindi dubbed",
+        "hindi audio",
+        "dubbed in hindi",
+        "hindi version",
+    )
+
+    for pattern in positive_patterns:
+        if pattern in lower:
+            return "Available"
+
+    return "Status Unknown"
+
+@staticmethod
+def _extract_platform(text: str) -> Optional[str]:
+    """Find streaming platform mentioned in the article."""
+
+    lower = text.lower()
+
+    platforms = (
+        ("Crunchyroll", ("crunchyroll",)),
+        ("Amazon MX Player", ("amazon mx player",)),
+        ("MX Player", ("mx player",)),
+        ("Netflix", ("netflix",)),
+        ("Amazon Prime Video", ("amazon prime", "prime video")),
+        ("Disney+ Hotstar", ("disney+ hotstar", "disney hotstar")),
+        ("Disney+", ("disney+", "disney plus")),
+        ("ZEE5", ("zee5",)),
+        ("SonyLIV", ("sonyliv", "sony liv")),
+    )
+
+    for platform, keywords in platforms:
+        if any(keyword in lower for keyword in keywords):
+            return platform
+
+    return None
+
+@staticmethod
+def _extract_english_status(text: str) -> Optional[str]:
+    """Find English-dub information when explicitly mentioned."""
+
+    lower = text.lower()
+
+    negative = (
+        "english dub not available",
+        "english dubbed not available",
+        "no english dub",
+    )
+
+    if any(item in lower for item in negative):
+        return "Not Available"
+
+    positive = (
+        "english dub",
+        "english dubbed",
+        "dubbed in english",
+        "english audio",
+    )
+
+    if any(item in lower for item in positive):
+        return "Available"
+
+    return None
+
+@staticmethod
+def _extract_episodes(text: str) -> Optional[str]:
+    """Extract a simple episode count when explicitly mentioned."""
+
+    patterns = (
+        r"(\d+)\s*(?:/\s*(\d+))?\s*episodes?",
+        r"(\d+)\s*episodes?\s*(?:in total)?",
+    )
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+
+        if match:
+            if match.group(2):
+                return f"{match.group(1)}/{match.group(2)}"
+            return match.group(1)
+
+    return None
+
 anime_scraper = AnimeScraper()
 
-
 def get_anime_info(anime_name: str) -> Optional[Dict]:
-    """
-    Convenience function to get anime information
-    
-    Args:
-        anime_name: Name of the anime to search for
-        
-    Returns:
-        Dictionary with anime information or None
-    """
-    return anime_scraper.search_anime(anime_name)
+"""Return anime information for the supplied name."""
+
+return anime_scraper.search_anime(anime_name)
