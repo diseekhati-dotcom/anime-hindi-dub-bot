@@ -1,562 +1,393 @@
 """
-Anime information service.
+Command handlers for Anime Hindi Dub Bot.
 
-Uses AnimeDubHindi schedule for anime metadata
-and Jikan API for anime posters.
+Provides:
+- /start
+- /help
+- /anime <name>
 
-This bot only provides anime information.
-It does not download, store, or distribute anime episodes/files.
+Anime information comes from AnimeDubHindi schedule.
+Poster comes from Jikan API.
+
+No anime episodes/files are downloaded, stored,
+or distributed.
 """
 
-import re
-from typing import Dict, Optional
+import html
+from typing import Dict
 
-import requests
-from bs4 import BeautifulSoup
+from telegram import Update
+from telegram.ext import ContextTypes
 
+from services.anime_scraper import get_anime_info
 from utils.logger import logger
 
 
 # -------------------------------------------------------------------
-# URLs
+# START COMMAND
 # -------------------------------------------------------------------
 
-SCHEDULE_URL = "https://www.animedubhindi.link/schedule.php"
-JIKAN_URL = "https://api.jikan.moe/v4/anime"
+async def start_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+) -> None:
+
+    message = (
+        "🎬 <b>Welcome to Anime Hindi Dub Bot!</b>\n\n"
+        "🇮🇳 Hindi-dubbed anime ki information "
+        "search karein.\n\n"
+
+        "🔎 <b>Example:</b>\n"
+        "<code>/anime Naruto</code>\n"
+        "<code>/anime Black Torch</code>\n"
+        "<code>/anime Solo Leveling</code>\n\n"
+
+        "📚 Bot anime information provide karta hai."
+    )
+
+    if update.message:
+        await update.message.reply_html(message)
 
 
-class AnimeScraper:
-    """Anime information lookup service."""
+# -------------------------------------------------------------------
+# HELP COMMAND
+# -------------------------------------------------------------------
 
-    def __init__(self):
-        self.session = requests.Session()
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+) -> None:
 
-        self.session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/120.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        })
+    message = (
+        "ℹ️ <b>Anime Hindi Dub Bot — Help</b>\n\n"
 
-    # ----------------------------------------------------------------
-    # MAIN SEARCH
-    # ----------------------------------------------------------------
+        "🎬 <b>Anime Search</b>\n"
+        "<code>/anime &lt;anime name&gt;</code>\n\n"
 
-    def search_anime(
-        self,
-        anime_name: str
-    ) -> Optional[Dict]:
+        "📌 <b>Examples:</b>\n"
+        "• <code>/anime Naruto</code>\n"
+        "• <code>/anime Black Torch</code>\n"
+        "• <code>/anime Solo Leveling</code>\n"
+        "• <code>/anime Mushoku Tensei</code>\n\n"
 
-        if not anime_name or not anime_name.strip():
-            return None
+        "📋 <b>Information:</b>\n"
+        "🇮🇳 Hindi Dub status\n"
+        "📺 Platform (jab available ho)\n"
+        "🎙️ Hindi Dub details\n"
+        "📺 Season / Episodes\n"
+        "🌐 Available languages\n"
+        "📅 Schedule / release information\n\n"
 
-        query = self._normalize(anime_name)
+        "🖼️ Anime poster bhi available ho to "
+        "show kiya jayega.\n\n"
+
+        "ℹ️ Bot sirf anime information provide karta hai."
+    )
+
+    if update.message:
+        await update.message.reply_html(message)
+
+
+# -------------------------------------------------------------------
+# ANIME COMMAND
+# -------------------------------------------------------------------
+
+async def anime_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+) -> None:
+
+    if not update.message:
+        return
+
+    # ---------------------------------------------------------------
+    # CHECK ANIME NAME
+    # ---------------------------------------------------------------
+
+    if not context.args:
+
+        await update.message.reply_html(
+            "❌ <b>Anime name missing</b>\n\n"
+            "Example:\n"
+            "<code>/anime Naruto</code>"
+        )
+
+        return
+
+    anime_name = " ".join(
+        context.args
+    ).strip()
+
+    # ---------------------------------------------------------------
+    # LOADING MESSAGE
+    # ---------------------------------------------------------------
+
+    loading = await update.message.reply_text(
+        "🔍 Searching for "
+        f"{html.escape(anime_name)}..."
+    )
+
+    try:
+
+        # -----------------------------------------------------------
+        # SEARCH ANIME
+        # -----------------------------------------------------------
+
+        anime_info = get_anime_info(
+            anime_name
+        )
+
+        # Delete loading message
+        try:
+            await loading.delete()
+        except Exception:
+            pass
+
+        # -----------------------------------------------------------
+        # NOT FOUND
+        # -----------------------------------------------------------
+
+        if not anime_info:
+
+            await update.message.reply_html(
+                "😕 <b>Anime not found:</b> "
+                f"{html.escape(anime_name)}\n\n"
+
+                "Try another spelling or title.\n\n"
+
+                "Example:\n"
+                "<code>/anime Black Torch</code>"
+            )
+
+            return
+
+        # -----------------------------------------------------------
+        # FORMAT INFORMATION
+        # -----------------------------------------------------------
+
+        response = _format_anime_info(
+            anime_info
+        )
+
+        # -----------------------------------------------------------
+        # POSTER
+        # -----------------------------------------------------------
+
+        poster_url = anime_info.get(
+            "poster_url"
+        )
+
+        if poster_url:
+
+            try:
+
+                await update.message.reply_photo(
+                    photo=poster_url,
+                    caption=response,
+                    parse_mode="HTML"
+                )
+
+                logger.info(
+                    "Anime info + poster sent: %s",
+                    anime_name
+                )
+
+                return
+
+            except Exception as poster_error:
+
+                logger.warning(
+                    "Poster could not be sent for %s: %s",
+                    anime_name,
+                    poster_error
+                )
+
+        # -----------------------------------------------------------
+        # WITHOUT POSTER
+        # -----------------------------------------------------------
+
+        await update.message.reply_html(
+            response
+        )
 
         logger.info(
-            "Searching anime: %s",
-            query
+            "Anime information sent: %s",
+            anime_name
         )
 
+    except Exception as error:
+
+        # Try deleting loading message
         try:
-            response = self.session.get(
-                SCHEDULE_URL,
-                timeout=15
-            )
+            await loading.delete()
+        except Exception:
+            pass
 
-            response.raise_for_status()
-
-            soup = BeautifulSoup(
-                response.text,
-                "html.parser"
-            )
-
-            result = self._find_anime(
-                soup,
-                query
-            )
-
-            if not result:
-                logger.info(
-                    "Anime not found: %s",
-                    anime_name
-                )
-                return None
-
-            # Get poster from Jikan
-            result["poster_url"] = self._get_poster(
-                result["name"]
-            )
-
-            return result
-
-        except requests.RequestException as exc:
-
-            logger.error(
-                "AnimeDubHindi request error: %s",
-                exc
-            )
-
-            return None
-
-        except Exception as exc:
-
-            logger.error(
-                "Anime scraper error: %s",
-                exc,
-                exc_info=True
-            )
-
-            return None
-
-    # ----------------------------------------------------------------
-    # FIND ANIME
-    # ----------------------------------------------------------------
-
-    def _find_anime(
-        self,
-        soup: BeautifulSoup,
-        query: str
-    ) -> Optional[Dict]:
-
-        elements = soup.find_all(
-            ["h1", "h2", "h3", "h4", "h5", "a"]
+        logger.error(
+            "Anime command error for '%s': %s",
+            anime_name,
+            error,
+            exc_info=True
         )
 
-        for element in elements:
-
-            title = element.get_text(
-                " ",
-                strip=True
-            )
-
-            if not title:
-                continue
-
-            if len(title) > 150:
-                continue
-
-            if not self._title_matches(
-                title,
-                query
-            ):
-                continue
-
-            # Find surrounding information
-            container = element
-
-            for _ in range(6):
-
-                if container.parent is None:
-                    break
-
-                container = container.parent
-
-                text = container.get_text(
-                    " ",
-                    strip=True
-                )
-
-                if (
-                    "Hindi" in text
-                    or "English" in text
-                    or "Japanese" in text
-                    or "Season" in text
-                    or "Episode" in text
-                    or "EP" in text
-                ):
-                    break
-
-            text = container.get_text(
-                " ",
-                strip=True
-            )
-
-            # Prevent accidentally reading entire webpage
-            if len(text) > 2500:
-
-                if element.parent:
-                    text = element.parent.get_text(
-                        " ",
-                        strip=True
-                    )
-
-            languages = self._extract_languages(
-                text
-            )
-
-            return {
-                "name": self._clean_title(title),
-
-                "hindi_dub": (
-                    "Available"
-                    if "Hindi" in languages
-                    else "Status Unknown"
-                ),
-
-                "platform": None,
-
-                "hindi_details": (
-                    "Hindi language listed on "
-                    "AnimeDubHindi schedule."
-                    if "Hindi" in languages
-                    else None
-                ),
-
-                "original_broadcast": None,
-
-                "episodes": self._extract_episode(
-                    text
-                ),
-
-                "season": self._extract_season(
-                    text
-                ),
-
-                "languages": (
-                    " • ".join(languages)
-                    if languages
-                    else None
-                ),
-
-                "schedule": self._extract_schedule(
-                    text
-                ),
-
-                "release_date": self._extract_date(
-                    text
-                ),
-
-                "source": "AnimeDubHindi",
-
-                # Used internally only.
-                # commands.py does not display it.
-                "source_link": SCHEDULE_URL,
-            }
-
-        return None
-
-    # ----------------------------------------------------------------
-    # POSTER
-    # ----------------------------------------------------------------
-
-    def _get_poster(
-        self,
-        anime_name: str
-    ) -> Optional[str]:
-        """Get poster URL from Jikan."""
-
-        try:
-
-            response = self.session.get(
-                JIKAN_URL,
-                params={
-                    "q": anime_name,
-                    "limit": 1,
-                },
-                timeout=10
-            )
-
-            response.raise_for_status()
-
-            data = response.json().get(
-                "data",
-                []
-            )
-
-            if not data:
-                logger.warning(
-                    "Poster not found: %s",
-                    anime_name
-                )
-                return None
-
-            images = data[0].get(
-                "images",
-                {}
-            )
-
-            jpg = images.get(
-                "jpg",
-                {}
-            )
-
-            poster_url = (
-                jpg.get("large_image_url")
-                or jpg.get("image_url")
-            )
-
-            return poster_url
-
-        except Exception as exc:
-
-            logger.warning(
-                "Poster error for %s: %s",
-                anime_name,
-                exc
-            )
-
-            return None
-
-    # ----------------------------------------------------------------
-    # NORMALIZE
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _normalize(
-        text: str
-    ) -> str:
-
-        text = text.lower()
-
-        text = text.replace(
-            "-",
-            " "
+        await update.message.reply_html(
+            "❌ <b>Error</b>\n\n"
+            "Anime information fetch nahi ho saki.\n"
+            "Please try again later."
         )
-
-        text = re.sub(
-            r"[^a-z0-9 ]+",
-            " ",
-            text
-        )
-
-        return " ".join(
-            text.split()
-        )
-
-    # ----------------------------------------------------------------
-    # TITLE MATCH
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _title_matches(
-        title: str,
-        query: str
-    ) -> bool:
-
-        normalized_title = (
-            AnimeScraper._normalize(title)
-        )
-
-        normalized_query = (
-            AnimeScraper._normalize(query)
-        )
-
-        if not normalized_query:
-            return False
-
-        if normalized_title == normalized_query:
-            return True
-
-        if normalized_query in normalized_title:
-            return True
-
-        query_words = set(
-            normalized_query.split()
-        )
-
-        title_words = set(
-            normalized_title.split()
-        )
-
-        return query_words.issubset(
-            title_words
-        )
-
-    # ----------------------------------------------------------------
-    # CLEAN TITLE
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _clean_title(
-        title: str
-    ) -> str:
-
-        title = re.sub(
-            r"\s+[-|–]\s+AnimeDubHindi.*$",
-            "",
-            title,
-            flags=re.I
-        )
-
-        return title.strip()
-
-    # ----------------------------------------------------------------
-    # SEASON
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _extract_season(
-        text: str
-    ) -> Optional[str]:
-
-        match = re.search(
-            r"\bSeason\s*([0-9]+)\b",
-            text,
-            re.I
-        )
-
-        if match:
-            return (
-                f"Season {match.group(1)}"
-            )
-
-        match = re.search(
-            r"\bS([0-9]+)\b",
-            text,
-            re.I
-        )
-
-        if match:
-            return (
-                f"Season {match.group(1)}"
-            )
-
-        return None
-
-    # ----------------------------------------------------------------
-    # EPISODE
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _extract_episode(
-        text: str
-    ) -> Optional[str]:
-
-        patterns = [
-            r"\bEP\s*([0-9]+(?:-[0-9]+)?)\b",
-            r"\bEpisode\s*([0-9]+(?:-[0-9]+)?)\b",
-        ]
-
-        for pattern in patterns:
-
-            match = re.search(
-                pattern,
-                text,
-                re.I
-            )
-
-            if match:
-                return match.group(1)
-
-        return None
-
-    # ----------------------------------------------------------------
-    # LANGUAGES
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _extract_languages(
-        text: str
-    ) -> list:
-
-        possible_languages = [
-            "Hindi",
-            "Tamil",
-            "Telugu",
-            "English",
-            "Japanese",
-        ]
-
-        found = []
-
-        for language in possible_languages:
-
-            if re.search(
-                rf"\b{re.escape(language)}\b",
-                text,
-                re.I
-            ):
-                found.append(language)
-
-        return found
-
-    # ----------------------------------------------------------------
-    # SCHEDULE
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _extract_schedule(
-        text: str
-    ) -> Optional[str]:
-
-        days = [
-            "Monday",
-            "Tuesday",
-            "Wednesday",
-            "Thursday",
-            "Friday",
-            "Saturday",
-            "Sunday",
-            "Daily",
-        ]
-
-        for day in days:
-
-            match = re.search(
-                rf"\b{day}\b\s+"
-                rf"([0-9]{{1,2}}:[0-9]{{2}}\s*[AP]M)",
-                text,
-                re.I
-            )
-
-            if match:
-
-                return (
-                    f"{day} "
-                    f"{match.group(1)}"
-                )
-
-        return None
-
-    # ----------------------------------------------------------------
-    # DATE
-    # ----------------------------------------------------------------
-
-    @staticmethod
-    def _extract_date(
-        text: str
-    ) -> Optional[str]:
-
-        patterns = [
-            r"\b\d{1,2}\s+"
-            r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-            r"\s+\d{4}\b",
-
-            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-            r"\s+\d{1,2},\s+\d{4}\b",
-
-            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
-        ]
-
-        for pattern in patterns:
-
-            match = re.search(
-                pattern,
-                text,
-                re.I
-            )
-
-            if match:
-                return match.group(0)
-
-        return None
 
 
 # -------------------------------------------------------------------
-# SINGLE INSTANCE
+# FORMAT ANIME INFORMATION
 # -------------------------------------------------------------------
 
-anime_scraper = AnimeScraper()
+def _format_anime_info(
+    anime_info: Dict
+) -> str:
+    """Create Telegram HTML response."""
 
+    # ---------------------------------------------------------------
+    # BASIC INFORMATION
+    # ---------------------------------------------------------------
 
-def get_anime_info(
-    anime_name: str
-) -> Optional[Dict]:
-    """Public helper used by Telegram bot."""
-
-    return anime_scraper.search_anime(
-        anime_name
+    name = html.escape(
+        str(
+            anime_info.get(
+                "name",
+                "Unknown"
+            )
+        )
     )
+
+    hindi_dub = html.escape(
+        str(
+            anime_info.get(
+                "hindi_dub",
+                "Status Unknown"
+            )
+        )
+    )
+
+    platform = anime_info.get(
+        "platform"
+    )
+
+    hindi_details = anime_info.get(
+        "hindi_details"
+    )
+
+    episodes = anime_info.get(
+        "episodes"
+    )
+
+    season = anime_info.get(
+        "season"
+    )
+
+    languages = anime_info.get(
+        "languages"
+    )
+
+    schedule = anime_info.get(
+        "schedule"
+    )
+
+    release_date = anime_info.get(
+        "release_date"
+    )
+
+    # ---------------------------------------------------------------
+    # START RESPONSE
+    # ---------------------------------------------------------------
+
+    response = (
+        f"🎬 <b>Anime:</b> {name}\n"
+        f"🇮🇳 <b>Hindi Dub:</b> {hindi_dub}\n"
+    )
+
+    # ---------------------------------------------------------------
+    # PLATFORM
+    # ---------------------------------------------------------------
+
+    if platform:
+
+        response += (
+            "📺 <b>Platform:</b> "
+            f"{html.escape(str(platform))}\n"
+        )
+
+    # ---------------------------------------------------------------
+    # HINDI DETAILS
+    # ---------------------------------------------------------------
+
+    if hindi_details:
+
+        response += (
+            "🎙️ <b>Hindi Dub Details:</b> "
+            f"{html.escape(str(hindi_details))}\n"
+        )
+
+    # ---------------------------------------------------------------
+    # SEASON
+    # ---------------------------------------------------------------
+
+    if season:
+
+        response += (
+            "📀 <b>Season:</b> "
+            f"{html.escape(str(season))}\n"
+        )
+
+    # ---------------------------------------------------------------
+    # EPISODES
+    # ---------------------------------------------------------------
+
+    if episodes:
+
+        response += (
+            "📺 <b>Episode:</b> "
+            f"{html.escape(str(episodes))}\n"
+        )
+
+    # ---------------------------------------------------------------
+    # LANGUAGES
+    # ---------------------------------------------------------------
+
+    if languages:
+
+        response += (
+            "🌐 <b>Languages:</b> "
+            f"{html.escape(str(languages))}\n"
+        )
+
+    # ---------------------------------------------------------------
+    # SCHEDULE
+    # ---------------------------------------------------------------
+
+    if schedule:
+
+        response += (
+            "📅 <b>Schedule:</b> "
+            f"{html.escape(str(schedule))}\n"
+        )
+
+    # ---------------------------------------------------------------
+    # RELEASE DATE
+    # ---------------------------------------------------------------
+
+    if release_date:
+
+        response += (
+            "🗓️ <b>Release Date:</b> "
+            f"{html.escape(str(release_date))}\n"
+        )
+
+    # ---------------------------------------------------------------
+    # SOURCE NAME ONLY
+    # ---------------------------------------------------------------
+
+    response += (
+        "\n🔎 <b>Source:</b> AnimeDubHindi"
+    )
+
+    return response
