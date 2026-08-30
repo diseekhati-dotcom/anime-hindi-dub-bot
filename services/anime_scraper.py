@@ -340,5 +340,8 @@ def get_anime_info(anime_name: str) -> Optional[Dict]:
     """Return anime information for the supplied name."""
 
     return anime_scraper.search_anime(anime_name)
+anime_scraper = AnimeScraper()
 
-return anime_scraper.search_anime(anime_name)
+def get_anime_info(anime_name: str) -> Optional[Dict]:
+    """Return anime information for the supplied name."""
+    return anime_scraper.search_anime(anime_name)
