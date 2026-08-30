@@ -337,6 +337,8 @@ def _extract_episodes(text: str) -> Optional[str]:
 anime_scraper = AnimeScraper()
 
 def get_anime_info(anime_name: str) -> Optional[Dict]:
-"""Return anime information for the supplied name."""
+    """Return anime information for the supplied name."""
+
+    return anime_scraper.search_anime(anime_name)
 
 return anime_scraper.search_anime(anime_name)
