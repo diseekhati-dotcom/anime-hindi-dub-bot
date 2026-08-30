@@ -1,6 +1,14 @@
 """
-Anime Mirchi Web Scraper Service
-Fetches Hindi-dubbed anime information from Anime Mirchi.
+Anime Mirchi scraper.
+
+Finds public anime information on Anime Mirchi and extracts:
+- anime name
+- Hindi dub status
+- platform
+- Hindi-dub details
+- episodes
+- poster
+- source article
 """
 
 import re
@@ -13,24 +21,19 @@ from bs4 import BeautifulSoup
 
 from config import (
     ANIME_MIRCHI_BASE_URL,
-    ANIME_MIRCHI_SEARCH_URL,
     REQUEST_TIMEOUT,
     MAX_RETRIES,
     RETRY_DELAY,
 )
-
 from utils.logger import logger
 
 
 class AnimeScraper:
-    """Scraper for Anime Mirchi."""
 
     def __init__(self):
         self.base_url = ANIME_MIRCHI_BASE_URL.rstrip("/")
-        self.search_url = ANIME_MIRCHI_SEARCH_URL
 
         self.session = requests.Session()
-
         self.session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -43,67 +46,87 @@ class AnimeScraper:
         })
 
     def search_anime(self, anime_name: str) -> Optional[Dict]:
-        """Search for an anime."""
 
         if not anime_name or not anime_name.strip():
             return None
 
         query = anime_name.strip()
 
-        logger.info("Searching for anime: %s", query)
-
-        html = self._request(
-            self.search_url,
-            params={"s": query},
+        logger.info(
+            "Searching Anime Mirchi for: %s",
+            query,
         )
 
-        if not html:
-            return None
-
-        soup = BeautifulSoup(
-            html,
-            "html.parser",
+        # Try WordPress search first.
+        search_html = self._request(
+            f"{self.base_url}/",
+            params={"s": query},
         )
 
         candidates = []
 
-        for link in soup.find_all("a", href=True):
-            title = link.get_text(" ", strip=True)
-            href = link.get("href", "").strip()
+        if search_html:
+            candidates = self._find_candidates(
+                search_html,
+                query,
+            )
 
-            if not title or not href:
-                continue
+        # If WordPress search doesn't return useful
+        # results, inspect the homepage as fallback.
+        if not candidates:
+            homepage = self._request(
+                f"{self.base_url}/"
+            )
 
-            if self._matches(title, query):
-                candidates.append({
-                    "title": title,
-                    "url": urljoin(
+            if homepage:
+                candidates = self._find_candidates(
+                    homepage,
+                    query,
+                )
+
+        # Try common Anime Mirchi content sections.
+        if not candidates:
+            for section in (
+                "/streaming/",
+                "/anime-india/",
+            ):
+                page = self._request(
+                    urljoin(
                         self.base_url + "/",
-                        href,
-                    ),
-                })
+                        section.lstrip("/"),
+                    )
+                )
 
-        # Remove duplicate URLs
-        unique = []
-        seen = set()
+                if page:
+                    candidates.extend(
+                        self._find_candidates(
+                            page,
+                            query,
+                        )
+                    )
 
-        for item in candidates:
-            if item["url"] in seen:
-                continue
+                if candidates:
+                    break
 
-            seen.add(item["url"])
-            unique.append(item)
+        candidates = self._unique_candidates(
+            candidates
+        )
 
-        if not unique:
+        if not candidates:
             logger.info(
-                "Anime not found: %s",
+                "No matching Anime Mirchi article found: %s",
                 query,
             )
             return None
 
-        best = self._best_match(
-            unique,
+        best = self._choose_best_match(
+            candidates,
             query,
+        )
+
+        logger.info(
+            "Selected article: %s",
+            best["url"],
         )
 
         article_html = self._request(
@@ -111,16 +134,7 @@ class AnimeScraper:
         )
 
         if not article_html:
-            return {
-                "name": best["title"],
-                "hindi_dub": "Status Unknown",
-                "platform": None,
-                "hindi_details": None,
-                "english_dub": None,
-                "episodes": None,
-                "poster_url": None,
-                "source_link": best["url"],
-            }
+            return None
 
         return self._parse_article(
             article_html,
@@ -133,7 +147,6 @@ class AnimeScraper:
         url: str,
         params=None,
     ) -> Optional[str]:
-        """Fetch webpage with retries."""
 
         for attempt in range(
             MAX_RETRIES + 1
@@ -163,13 +176,164 @@ class AnimeScraper:
 
         return None
 
+    def _find_candidates(
+        self,
+        html: str,
+        query: str,
+    ):
+        soup = BeautifulSoup(
+            html,
+            "html.parser",
+        )
+
+        candidates = []
+
+        for link in soup.find_all(
+            "a",
+            href=True,
+        ):
+            title = link.get_text(
+                " ",
+                strip=True,
+            )
+
+            href = link.get(
+                "href",
+                "",
+            ).strip()
+
+            if not title or not href:
+                continue
+
+            absolute_url = urljoin(
+                self.base_url + "/",
+                href,
+            )
+
+            if not absolute_url.startswith(
+                self.base_url
+            ):
+                continue
+
+            if self._is_good_candidate(
+                title,
+                query,
+                absolute_url,
+            ):
+                candidates.append({
+                    "title": title,
+                    "url": absolute_url,
+                })
+
+        return candidates
+
+    @staticmethod
+    def _is_good_candidate(
+        title: str,
+        query: str,
+        url: str,
+    ) -> bool:
+
+        title_lower = title.lower()
+        query_lower = query.lower().strip()
+
+        if query_lower in title_lower:
+            return True
+
+        query_words = re.findall(
+            r"[a-z0-9]+",
+            query_lower,
+        )
+
+        title_words = re.findall(
+            r"[a-z0-9]+",
+            title_lower,
+        )
+
+        if query_words and all(
+            word in title_words
+            for word in query_words
+        ):
+            return True
+
+        # Also allow the anime name to appear
+        # in the article URL.
+        slug = url.lower()
+
+        slug_words = re.findall(
+            r"[a-z0-9]+",
+            slug,
+        )
+
+        return bool(
+            query_words
+            and all(
+                word in slug_words
+                for word in query_words
+            )
+        )
+
+    @staticmethod
+    def _unique_candidates(
+        candidates,
+    ):
+        result = []
+        seen = set()
+
+        for item in candidates:
+            url = item["url"]
+
+            if url in seen:
+                continue
+
+            seen.add(url)
+            result.append(item)
+
+        return result
+
+    @staticmethod
+    def _choose_best_match(
+        candidates,
+        query: str,
+    ) -> Dict:
+
+        query_lower = query.lower().strip()
+
+        # Exact title.
+        for item in candidates:
+            if (
+                item["title"]
+                .lower()
+                .strip()
+                == query_lower
+            ):
+                return item
+
+        # Title starts with query.
+        for item in candidates:
+            if (
+                item["title"]
+                .lower()
+                .startswith(query_lower)
+            ):
+                return item
+
+        # Prefer URLs containing query.
+        for item in candidates:
+            if query_lower.replace(
+                " ",
+                "-",
+            ) in item["url"].lower():
+                return item
+
+        return candidates[0]
+
     def _parse_article(
         self,
         html: str,
         title: str,
         source_url: str,
     ) -> Dict:
-        """Parse anime article."""
 
         soup = BeautifulSoup(
             html,
@@ -188,52 +352,102 @@ class AnimeScraper:
             strip=True,
         )
 
-        poster_url = self._extract_poster(
-            article,
-            source_url,
-        )
-
-        platform = self._extract_platform(
-            text
-        )
-
-        hindi_details = self._extract_hindi_details(
-            text
-        )
-
         return {
-            "name": self._clean_title(title),
+            "name": self._clean_title(
+                title,
+                soup,
+            ),
             "hindi_dub": self._extract_hindi_status(
                 text
             ),
-            "platform": platform,
-            "hindi_details": hindi_details,
+            "platform": self._extract_platform(
+                text
+            ),
+            "hindi_details": self._extract_hindi_details(
+                text
+            ),
             "english_dub": self._extract_english_status(
                 text
             ),
             "episodes": self._extract_episodes(
                 text
             ),
-            "poster_url": poster_url,
+            "poster_url": self._extract_poster(
+                soup,
+                source_url,
+            ),
             "source_link": source_url,
         }
 
     @staticmethod
-    def _extract_poster(
-        article,
-        source_url: str,
-    ) -> Optional[str]:
-        """Extract poster image URL."""
+    def _clean_title(
+        title: str,
+        soup,
+    ) -> str:
 
-        # Try OpenGraph image first
-        parent = article
+        # Prefer article H1 when available.
+        h1 = soup.find("h1")
 
-        image = parent.find(
-            "img",
-            src=True,
+        if h1:
+            clean = h1.get_text(
+                " ",
+                strip=True,
+            )
+        else:
+            clean = title
+
+        clean = re.sub(
+            r"\s+[-|–]\s+Anime Mirchi.*$",
+            "",
+            clean,
+            flags=re.I,
         )
 
-        if image:
+        return clean.strip()
+
+    @staticmethod
+    def _extract_poster(
+        soup,
+        source_url: str,
+    ) -> Optional[str]:
+
+        # WordPress/OpenGraph poster.
+        meta = soup.find(
+            "meta",
+            property="og:image",
+        )
+
+        if meta and meta.get("content"):
+            return urljoin(
+                source_url,
+                meta["content"].strip(),
+            )
+
+        # Twitter card fallback.
+        meta = soup.find(
+            "meta",
+            attrs={
+                "name": "twitter:image"
+            },
+        )
+
+        if meta and meta.get("content"):
+            return urljoin(
+                source_url,
+                meta["content"].strip(),
+            )
+
+        # Article image fallback.
+        article = (
+            soup.find("article")
+            or soup.find("main")
+            or soup
+        )
+
+        for image in article.find_all(
+            "img"
+        ):
+
             src = (
                 image.get("src")
                 or image.get("data-src")
@@ -246,128 +460,43 @@ class AnimeScraper:
                     src,
                 )
 
-        # Try lazy-loaded images
-        for image in article.find_all("img"):
-            src = (
-                image.get("data-src")
-                or image.get("data-lazy-src")
-                or image.get("src")
-            )
-
-            if src:
-                return urljoin(
-                    source_url,
-                    src,
-                )
-
         return None
-
-    @staticmethod
-    def _clean_title(
-        title: str,
-    ) -> str:
-        """Clean title."""
-
-        title = re.sub(
-            r"\s+[-|–]\s+Anime Mirchi.*$",
-            "",
-            title,
-            flags=re.I,
-        )
-
-        return title.strip()
-
-    @staticmethod
-    def _matches(
-        title: str,
-        query: str,
-    ) -> bool:
-        """Check search result match."""
-
-        title_lower = title.lower().strip()
-        query_lower = query.lower().strip()
-
-        if query_lower in title_lower:
-            return True
-
-        query_words = re.findall(
-            r"[a-z0-9]+",
-            query_lower,
-        )
-
-        title_words = re.findall(
-            r"[a-z0-9]+",
-            title_lower,
-        )
-
-        return bool(
-            query_words
-            and all(
-                word in title_words
-                for word in query_words
-            )
-        )
-
-    @staticmethod
-    def _best_match(
-        candidates,
-        query: str,
-    ) -> Dict:
-        """Choose best search result."""
-
-        query_lower = query.lower().strip()
-
-        for item in candidates:
-            if (
-                item["title"]
-                .lower()
-                .strip()
-                == query_lower
-            ):
-                return item
-
-        for item in candidates:
-            if (
-                item["title"]
-                .lower()
-                .startswith(query_lower)
-            ):
-                return item
-
-        return candidates[0]
 
     @staticmethod
     def _extract_hindi_status(
         text: str,
     ) -> str:
-        """Detect Hindi dub status."""
 
         lower = text.lower()
 
-        negative = [
+        negative = (
             "hindi dub not available",
             "hindi dubbed not available",
             "no hindi dub",
             "without hindi dub",
             "hindi audio not available",
             "not available in hindi",
-        ]
+        )
 
-        for phrase in negative:
-            if phrase in lower:
-                return "Not Available"
+        if any(
+            phrase in lower
+            for phrase in negative
+        ):
+            return "Not Available"
 
-        positive = [
+        positive = (
             "hindi dub",
             "hindi dubbed",
             "hindi audio",
             "dubbed in hindi",
             "hindi version",
-        ]
+        )
 
-        for phrase in positive:
-            if phrase in lower:
-                return "Available"
+        if any(
+            phrase in lower
+            for phrase in positive
+        ):
+            return "Available"
 
         return "Status Unknown"
 
@@ -375,25 +504,22 @@ class AnimeScraper:
     def _extract_hindi_details(
         text: str,
     ) -> Optional[str]:
-        """Extract useful Hindi-dub information."""
 
         lower = text.lower()
 
-        if "crunchyroll" in lower and (
-            "sony yay" in lower
-            or "sony yay!" in lower
+        if (
+            "hindi" in lower
+            and "crunchyroll" in lower
         ):
             return (
-                "Anime Mirchi ke mutabik "
-                "Crunchyroll par available Hindi dub "
-                "wahi dub hai jo pehle Sony YAY! par "
-                "aired hua tha."
+                "Hindi dub is listed on "
+                "Crunchyroll India by Anime Mirchi."
             )
 
-        if "sony yay" in lower:
+        if "hindi dub" in lower:
             return (
-                "Hindi dub Sony YAY! par "
-                "aired hua tha."
+                "Anime Mirchi lists a Hindi dub "
+                "for this anime."
             )
 
         return None
@@ -402,53 +528,63 @@ class AnimeScraper:
     def _extract_platform(
         text: str,
     ) -> Optional[str]:
-        """Detect platform."""
 
         lower = text.lower()
 
-        platforms = [
+        platforms = (
             (
                 "Crunchyroll India",
-                ["crunchyroll"],
+                (
+                    "crunchyroll india",
+                    "crunchyroll",
+                ),
             ),
             (
                 "Amazon MX Player",
-                ["amazon mx player"],
+                ("amazon mx player",),
             ),
             (
                 "MX Player",
-                ["mx player"],
+                ("mx player",),
             ),
             (
                 "Netflix",
-                ["netflix"],
+                ("netflix",),
             ),
             (
                 "Amazon Prime Video",
-                ["amazon prime", "prime video"],
+                (
+                    "amazon prime",
+                    "prime video",
+                ),
             ),
             (
                 "Disney+ Hotstar",
-                ["disney+ hotstar", "disney hotstar"],
-            ),
-            (
-                "Disney+",
-                ["disney+", "disney plus"],
+                (
+                    "disney+ hotstar",
+                    "disney hotstar",
+                ),
             ),
             (
                 "ZEE5",
-                ["zee5"],
+                ("zee5",),
             ),
             (
                 "SonyLIV",
-                ["sonyliv", "sony liv"],
+                (
+                    "sonyliv",
+                    "sony liv",
+                ),
             ),
-        ]
+        )
 
         for platform, keywords in platforms:
-            for keyword in keywords:
-                if keyword in lower:
-                    return platform
+
+            if any(
+                keyword in lower
+                for keyword in keywords
+            ):
+                return platform
 
         return None
 
@@ -456,30 +592,29 @@ class AnimeScraper:
     def _extract_english_status(
         text: str,
     ) -> Optional[str]:
-        """Detect English dub."""
 
         lower = text.lower()
 
-        negative = [
-            "english dub not available",
-            "english dubbed not available",
-            "no english dub",
-        ]
+        if any(
+            phrase in lower
+            for phrase in (
+                "english dub not available",
+                "english dubbed not available",
+                "no english dub",
+            )
+        ):
+            return "Not Available"
 
-        for phrase in negative:
-            if phrase in lower:
-                return "Not Available"
-
-        positive = [
-            "english dub",
-            "english dubbed",
-            "dubbed in english",
-            "english audio",
-        ]
-
-        for phrase in positive:
-            if phrase in lower:
-                return "Available"
+        if any(
+            phrase in lower
+            for phrase in (
+                "english dub",
+                "english dubbed",
+                "dubbed in english",
+                "english audio",
+            )
+        ):
+            return "Available"
 
         return None
 
@@ -487,30 +622,26 @@ class AnimeScraper:
     def _extract_episodes(
         text: str,
     ) -> Optional[str]:
-        """Extract episode count."""
 
-        patterns = [
-            r"(\d+)\s*/\s*(\d+)\s*episodes?",
-            r"(\d+)\s*episodes?",
-        ]
+        # Try explicit "Episodes: 12"
+        match = re.search(
+            r"episodes?\s*:\s*(\d+)",
+            text,
+            re.I,
+        )
 
-        for pattern in patterns:
+        if match:
+            return match.group(1)
 
-            match = re.search(
-                pattern,
-                text,
-                re.I,
-            )
+        # Try "12 episodes"
+        match = re.search(
+            r"(\d+)\s+episodes?",
+            text,
+            re.I,
+        )
 
-            if match:
-
-                if match.lastindex == 2:
-                    return (
-                        f"{match.group(1)}/"
-                        f"{match.group(2)}"
-                    )
-
-                return match.group(1)
+        if match:
+            return match.group(1)
 
         return None
 
@@ -521,8 +652,7 @@ anime_scraper = AnimeScraper()
 def get_anime_info(
     anime_name: str,
 ) -> Optional[Dict]:
-    """Return anime information."""
 
     return anime_scraper.search_anime(
         anime_name
-                )
+    )
