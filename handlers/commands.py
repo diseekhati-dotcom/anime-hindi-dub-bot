@@ -7,15 +7,17 @@ Provides:
 - /anime <name>
 
 Anime information comes from AnimeDubHindi schedule.
-Poster comes from Jikan API.
+Poster comes from Jikan/MAL metadata.
 
 No anime episodes/files are downloaded, stored,
 or distributed.
 """
 
 import html
+from io import BytesIO
 from typing import Dict
 
+import requests
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -24,7 +26,7 @@ from utils.logger import logger
 
 
 # -------------------------------------------------------------------
-# START COMMAND
+# START
 # -------------------------------------------------------------------
 
 async def start_command(
@@ -32,31 +34,36 @@ async def start_command(
     context: ContextTypes.DEFAULT_TYPE
 ) -> None:
 
+    if not update.message:
+        return
+
     message = (
         "🎬 <b>Welcome to Anime Hindi Dub Bot!</b>\n\n"
         "🇮🇳 Hindi-dubbed anime ki information "
         "search karein.\n\n"
-
         "🔎 <b>Example:</b>\n"
         "<code>/anime Naruto</code>\n"
         "<code>/anime Black Torch</code>\n"
         "<code>/anime Solo Leveling</code>\n\n"
-
-        "📚 Bot anime information provide karta hai."
+        "🖼️ Anime poster bhi available ho to "
+        "show kiya jayega.\n\n"
+        "ℹ️ Bot sirf anime information provide karta hai."
     )
 
-    if update.message:
-        await update.message.reply_html(message)
+    await update.message.reply_html(message)
 
 
 # -------------------------------------------------------------------
-# HELP COMMAND
+# HELP
 # -------------------------------------------------------------------
 
 async def help_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+
+    if not update.message:
+        return
 
     message = (
         "ℹ️ <b>Anime Hindi Dub Bot — Help</b>\n\n"
@@ -74,22 +81,21 @@ async def help_command(
         "🇮🇳 Hindi Dub status\n"
         "📺 Platform (jab available ho)\n"
         "🎙️ Hindi Dub details\n"
-        "📺 Season / Episodes\n"
-        "🌐 Available languages\n"
+        "📀 Season\n"
+        "📺 Episode\n"
+        "🌐 Languages\n"
         "📅 Schedule / release information\n\n"
 
-        "🖼️ Anime poster bhi available ho to "
-        "show kiya jayega.\n\n"
+        "🖼️ Poster: Jikan / MyAnimeList metadata\n\n"
 
         "ℹ️ Bot sirf anime information provide karta hai."
     )
 
-    if update.message:
-        await update.message.reply_html(message)
+    await update.message.reply_html(message)
 
 
 # -------------------------------------------------------------------
-# ANIME COMMAND
+# ANIME
 # -------------------------------------------------------------------
 
 async def anime_command(
@@ -99,10 +105,6 @@ async def anime_command(
 
     if not update.message:
         return
-
-    # ---------------------------------------------------------------
-    # CHECK ANIME NAME
-    # ---------------------------------------------------------------
 
     if not context.args:
 
@@ -118,10 +120,6 @@ async def anime_command(
         context.args
     ).strip()
 
-    # ---------------------------------------------------------------
-    # LOADING MESSAGE
-    # ---------------------------------------------------------------
-
     loading = await update.message.reply_text(
         "🔍 Searching for "
         f"{html.escape(anime_name)}..."
@@ -130,14 +128,13 @@ async def anime_command(
     try:
 
         # -----------------------------------------------------------
-        # SEARCH ANIME
+        # SEARCH
         # -----------------------------------------------------------
 
         anime_info = get_anime_info(
             anime_name
         )
 
-        # Delete loading message
         try:
             await loading.delete()
         except Exception:
@@ -152,17 +149,13 @@ async def anime_command(
             await update.message.reply_html(
                 "😕 <b>Anime not found:</b> "
                 f"{html.escape(anime_name)}\n\n"
-
-                "Try another spelling or title.\n\n"
-
-                "Example:\n"
-                "<code>/anime Black Torch</code>"
+                "Try another spelling or title."
             )
 
             return
 
         # -----------------------------------------------------------
-        # FORMAT INFORMATION
+        # FORMAT
         # -----------------------------------------------------------
 
         response = _format_anime_info(
@@ -179,6 +172,7 @@ async def anime_command(
 
         if poster_url:
 
+            # First try Telegram direct URL.
             try:
 
                 await update.message.reply_photo(
@@ -188,22 +182,76 @@ async def anime_command(
                 )
 
                 logger.info(
-                    "Anime info + poster sent: %s",
+                    "Poster sent directly: %s",
                     anime_name
                 )
 
                 return
 
-            except Exception as poster_error:
+            except Exception as direct_error:
 
                 logger.warning(
-                    "Poster could not be sent for %s: %s",
+                    "Direct poster send failed for %s: %s",
                     anime_name,
-                    poster_error
+                    direct_error
+                )
+
+            # -------------------------------------------------------
+            # FALLBACK:
+            # Fetch image in memory and send bytes.
+            # It is NOT saved to disk.
+            # -------------------------------------------------------
+
+            try:
+
+                image_response = requests.get(
+                    poster_url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 "
+                            "AnimeHindiDubBot"
+                        )
+                    },
+                    timeout=20
+                )
+
+                image_response.raise_for_status()
+
+                image_data = image_response.content
+
+                if image_data:
+
+                    image_file = BytesIO(
+                        image_data
+                    )
+
+                    image_file.name = (
+                        "anime_poster.jpg"
+                    )
+
+                    await update.message.reply_photo(
+                        photo=image_file,
+                        caption=response,
+                        parse_mode="HTML"
+                    )
+
+                    logger.info(
+                        "Poster sent using memory fallback: %s",
+                        anime_name
+                    )
+
+                    return
+
+            except Exception as image_error:
+
+                logger.warning(
+                    "Poster fallback failed for %s: %s",
+                    anime_name,
+                    image_error
                 )
 
         # -----------------------------------------------------------
-        # WITHOUT POSTER
+        # INFORMATION WITHOUT POSTER
         # -----------------------------------------------------------
 
         await update.message.reply_html(
@@ -217,7 +265,6 @@ async def anime_command(
 
     except Exception as error:
 
-        # Try deleting loading message
         try:
             await loading.delete()
         except Exception:
@@ -238,17 +285,13 @@ async def anime_command(
 
 
 # -------------------------------------------------------------------
-# FORMAT ANIME INFORMATION
+# FORMAT
 # -------------------------------------------------------------------
 
 def _format_anime_info(
     anime_info: Dict
 ) -> str:
     """Create Telegram HTML response."""
-
-    # ---------------------------------------------------------------
-    # BASIC INFORMATION
-    # ---------------------------------------------------------------
 
     name = html.escape(
         str(
@@ -276,12 +319,12 @@ def _format_anime_info(
         "hindi_details"
     )
 
-    episodes = anime_info.get(
-        "episodes"
-    )
-
     season = anime_info.get(
         "season"
+    )
+
+    episodes = anime_info.get(
+        "episodes"
     )
 
     languages = anime_info.get(
@@ -296,18 +339,10 @@ def _format_anime_info(
         "release_date"
     )
 
-    # ---------------------------------------------------------------
-    # START RESPONSE
-    # ---------------------------------------------------------------
-
     response = (
         f"🎬 <b>Anime:</b> {name}\n"
         f"🇮🇳 <b>Hindi Dub:</b> {hindi_dub}\n"
     )
-
-    # ---------------------------------------------------------------
-    # PLATFORM
-    # ---------------------------------------------------------------
 
     if platform:
 
@@ -316,20 +351,12 @@ def _format_anime_info(
             f"{html.escape(str(platform))}\n"
         )
 
-    # ---------------------------------------------------------------
-    # HINDI DETAILS
-    # ---------------------------------------------------------------
-
     if hindi_details:
 
         response += (
             "🎙️ <b>Hindi Dub Details:</b> "
             f"{html.escape(str(hindi_details))}\n"
         )
-
-    # ---------------------------------------------------------------
-    # SEASON
-    # ---------------------------------------------------------------
 
     if season:
 
@@ -338,20 +365,12 @@ def _format_anime_info(
             f"{html.escape(str(season))}\n"
         )
 
-    # ---------------------------------------------------------------
-    # EPISODES
-    # ---------------------------------------------------------------
-
     if episodes:
 
         response += (
             "📺 <b>Episode:</b> "
             f"{html.escape(str(episodes))}\n"
         )
-
-    # ---------------------------------------------------------------
-    # LANGUAGES
-    # ---------------------------------------------------------------
 
     if languages:
 
@@ -360,10 +379,6 @@ def _format_anime_info(
             f"{html.escape(str(languages))}\n"
         )
 
-    # ---------------------------------------------------------------
-    # SCHEDULE
-    # ---------------------------------------------------------------
-
     if schedule:
 
         response += (
@@ -371,20 +386,12 @@ def _format_anime_info(
             f"{html.escape(str(schedule))}\n"
         )
 
-    # ---------------------------------------------------------------
-    # RELEASE DATE
-    # ---------------------------------------------------------------
-
     if release_date:
 
         response += (
             "🗓️ <b>Release Date:</b> "
             f"{html.escape(str(release_date))}\n"
         )
-
-    # ---------------------------------------------------------------
-    # SOURCE NAME ONLY
-    # ---------------------------------------------------------------
 
     response += (
         "\n🔎 <b>Source:</b> AnimeDubHindi"
