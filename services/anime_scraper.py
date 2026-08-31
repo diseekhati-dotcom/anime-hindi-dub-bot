@@ -1,23 +1,27 @@
 """
 Anime information service.
 
-Live metadata sources:
-- AnimeDubHindi schedule/category/post pages
-    -> Hindi Dub
-    -> Season
-    -> Episode
-    -> Languages
-    -> Schedule
-    -> Release Date
-    -> Official Dub By
-    -> Platform indicators when explicitly listed
-- Jikan / MyAnimeList
-    -> Poster
-    -> Studio
-    -> Anime identity
+Searches:
+- AnimeDubHindi schedule/archive/search pages
+- Jikan / MyAnimeList metadata
 
-The bot does NOT download, store, or distribute anime episodes/files.
-Only public metadata is read.
+Returns:
+- Anime name
+- Hindi dub status
+- Platform (only when explicitly found)
+- Dub By (only when explicitly found)
+- Studio
+- Season
+- Episode
+- Languages
+- Schedule
+- Release date
+- Poster
+
+Important:
+- No anime episodes are downloaded.
+- No watch/download links are returned.
+- Source URLs are not displayed by the bot.
 """
 
 import re
@@ -30,67 +34,17 @@ from bs4 import BeautifulSoup
 from utils.logger import logger
 
 
-# ===================================================================
+# =====================================================================
 # URLS
-# ===================================================================
+# =====================================================================
 
-BASE_URL = "https://www.animedubhindi.link/"
+SITE_URL = "https://www.animedubhindi.link/"
 SCHEDULE_URL = "https://www.animedubhindi.link/schedule.php"
 JIKAN_URL = "https://api.jikan.moe/v4/anime"
 
-# Public category pages used only for finding metadata.
-SEARCH_PAGES = [
-    BASE_URL,
-    f"{BASE_URL}page/2/",
-    f"{BASE_URL}category/series/",
-    f"{BASE_URL}category/english/",
-    f"{BASE_URL}category/language/hindi/",
-    f"{BASE_URL}category/language/hindi/page/2/",
-    f"{BASE_URL}category/language/hindi/page/3/",
-]
-
-
-# ===================================================================
-# PLATFORM NAMES
-# ===================================================================
-
-PLATFORM_NAMES = [
-    "Crunchyroll",
-    "Netflix",
-    "JioHotstar",
-    "Jio Hotstar",
-    "Amazon Prime Video",
-    "Prime Video",
-    "Amazon Prime",
-    "Sony YAY",
-    "Sony Yay",
-    "Sony LIV",
-    "MX Player",
-    "YouTube",
-    "Muse Asia",
-    "Muse India",
-    "Ani-One Asia",
-    "Ani-One India",
-    "Disney+",
-    "Disney Plus",
-    "Animax",
-]
-
-
-# ===================================================================
-# PLATFORM ABBREVIATIONS FOUND ON SOURCE PAGES
-# ===================================================================
-
-PLATFORM_ABBREVIATIONS = {
-    "NF": "Netflix",
-    "AMZN": "Amazon Prime Video",
-    "AMAZON": "Amazon Prime Video",
-    "CR": "Crunchyroll",
-}
-
 
 class AnimeScraper:
-    """Live anime metadata lookup service."""
+    """Live anime information lookup service."""
 
     def __init__(self) -> None:
 
@@ -106,18 +60,14 @@ class AnimeScraper:
             "Accept-Language": "en-US,en;q=0.9",
         })
 
-    # ===============================================================
+    # =================================================================
     # MAIN SEARCH
-    # ===============================================================
+    # =================================================================
 
     def search_anime(
         self,
         anime_name: str
     ) -> Optional[Dict]:
-        """
-        Search live AnimeDubHindi metadata and attach
-        Jikan/MAL information.
-        """
 
         if not anime_name:
             return None
@@ -132,67 +82,56 @@ class AnimeScraper:
             anime_name
         )
 
-        query = self._normalize(anime_name)
+        query = self._normalize(
+            anime_name
+        )
 
-        try:
+        # -------------------------------------------------------------
+        # 1. AnimeDubHindi schedule
+        # -------------------------------------------------------------
 
-            # -------------------------------------------------------
-            # 1. SEARCH SCHEDULE
-            # -------------------------------------------------------
+        result = self._search_page(
+            SCHEDULE_URL,
+            query
+        )
 
-            result = self._search_schedule(
+        # -------------------------------------------------------------
+        # 2. AnimeDubHindi website search
+        # -------------------------------------------------------------
+
+        if not result:
+
+            result = self._search_site(
+                anime_name,
                 query
             )
 
-            # -------------------------------------------------------
-            # 2. IF NOT FOUND, SEARCH SITE PAGES
-            # -------------------------------------------------------
+        # -------------------------------------------------------------
+        # 3. Jikan / MAL
+        # -------------------------------------------------------------
 
-            if not result:
+        mal_info = self._get_mal_info(
+            anime_name
+        )
 
-                result = self._search_site_pages(
-                    query
-                )
+        # -------------------------------------------------------------
+        # Anime not found anywhere
+        # -------------------------------------------------------------
 
-            if not result:
+        if not result and not mal_info:
 
-                logger.info(
-                    "Anime not found: %s",
-                    anime_name
-                )
-
-                return None
-
-            # -------------------------------------------------------
-            # 3. GET DETAILED SOURCE POST
-            # -------------------------------------------------------
-
-            detail_url = result.get(
-                "detail_url"
+            logger.info(
+                "Anime not found anywhere: %s",
+                anime_name
             )
 
-            if detail_url:
+            return None
 
-                detail_data = (
-                    self._get_detail_information(
-                        detail_url,
-                        result["name"]
-                    )
-                )
+        # -------------------------------------------------------------
+        # If AnimeDubHindi found it
+        # -------------------------------------------------------------
 
-                if detail_data:
-
-                    result.update(
-                        detail_data
-                    )
-
-            # -------------------------------------------------------
-            # 4. JIKAN / MAL
-            # -------------------------------------------------------
-
-            mal_info = self._get_mal_info(
-                result["name"]
-            )
+        if result:
 
             if mal_info:
 
@@ -220,65 +159,74 @@ class AnimeScraper:
                 result["studio"] = None
                 result["mal_url"] = None
 
-            # -------------------------------------------------------
-            # 5. PLATFORM FALLBACK
-            # -------------------------------------------------------
-
-            if not result.get("platform"):
-
-                result["platform"] = (
-                    self._detect_platform(
-                        result.get(
-                            "raw_text",
-                            ""
-                        )
-                    )
-                )
-
-            # -------------------------------------------------------
-            # 6. CLEAN INTERNAL DATA
-            # -------------------------------------------------------
-
-            result.pop(
-                "raw_text",
-                None
-            )
-
             return result
 
-        except requests.RequestException as exc:
+        # -------------------------------------------------------------
+        # If only Jikan found it
+        #
+        # This still lets users search ANY anime.
+        # Hindi information is NOT guessed.
+        # -------------------------------------------------------------
 
-            logger.error(
-                "Anime source request failed: %s",
-                exc
-            )
+        return {
+            "name": (
+                mal_info.get(
+                    "name"
+                )
+                or anime_name
+            ),
 
-            return None
+            "hindi_dub": "Not Verified",
 
-        except Exception as exc:
+            "platform": None,
 
-            logger.error(
-                "Anime search error: %s",
-                exc,
-                exc_info=True
-            )
+            "dub_by": None,
 
-            return None
+            "studio": mal_info.get(
+                "studio"
+            ),
 
-    # ===============================================================
-    # SCHEDULE SEARCH
-    # ===============================================================
+            "hindi_details": None,
 
-    def _search_schedule(
+            "episodes": None,
+
+            "season": None,
+
+            "languages": None,
+
+            "schedule": None,
+
+            "release_date": None,
+
+            "source": "MyAnimeList / Jikan",
+
+            "source_link": None,
+
+            "poster_url": mal_info.get(
+                "poster_url"
+            ),
+
+            "mal_url": mal_info.get(
+                "mal_url"
+            ),
+        }
+
+    # =================================================================
+    # GENERIC PAGE SEARCH
+    # =================================================================
+
+    def _search_page(
         self,
+        url: str,
         query: str
     ) -> Optional[Dict]:
 
         try:
 
             response = self.session.get(
-                SCHEDULE_URL,
-                timeout=20
+                url,
+                timeout=20,
+                allow_redirects=True
             )
 
             response.raise_for_status()
@@ -288,30 +236,92 @@ class AnimeScraper:
                 "html.parser"
             )
 
-            elements = soup.find_all(
-                [
-                    "h1",
-                    "h2",
-                    "h3",
-                    "h4",
-                    "h5",
-                    "a",
-                    "strong",
-                    "b",
-                ]
+            return self._find_anime(
+                soup,
+                query
             )
 
-            for element in elements:
+        except Exception as exc:
 
-                title = element.get_text(
+            logger.debug(
+                "Page search failed %s: %s",
+                url,
+                exc
+            )
+
+            return None
+
+    # =================================================================
+    # ANIMEDUBHINDI SITE SEARCH
+    # =================================================================
+
+    def _search_site(
+        self,
+        anime_name: str,
+        query: str
+    ) -> Optional[Dict]:
+
+        # Common WordPress-style search.
+        search_url = (
+            SITE_URL
+            + "?s="
+            + quote(anime_name)
+        )
+
+        try:
+
+            response = self.session.get(
+                search_url,
+                timeout=20,
+                allow_redirects=True
+            )
+
+            if response.status_code != 200:
+                return None
+
+            soup = BeautifulSoup(
+                response.text,
+                "html.parser"
+            )
+
+            # ---------------------------------------------------------
+            # First: inspect search page itself
+            # ---------------------------------------------------------
+
+            result = self._find_anime(
+                soup,
+                query
+            )
+
+            if result:
+                return result
+
+            # ---------------------------------------------------------
+            # Second: inspect matching article links
+            # ---------------------------------------------------------
+
+            links = soup.find_all(
+                "a",
+                href=True
+            )
+
+            visited = set()
+
+            for link in links:
+
+                title = link.get_text(
                     " ",
                     strip=True
                 )
 
-                if not title:
+                href = link.get(
+                    "href"
+                )
+
+                if not title or not href:
                     continue
 
-                if len(title) > 200:
+                if len(title) > 250:
                     continue
 
                 if not self._title_matches(
@@ -320,463 +330,320 @@ class AnimeScraper:
                 ):
                     continue
 
-                container = element
+                full_url = urljoin(
+                    SITE_URL,
+                    href
+                )
 
-                for _ in range(8):
+                if full_url in visited:
+                    continue
 
-                    if container.parent is None:
-                        break
+                visited.add(
+                    full_url
+                )
 
-                    container = container.parent
+                # Don't leave the AnimeDubHindi site.
+                if not full_url.startswith(
+                    SITE_URL
+                ):
+                    continue
 
-                    text = container.get_text(
-                        " ",
-                        strip=True
+                try:
+
+                    article_response = (
+                        self.session.get(
+                            full_url,
+                            timeout=15
+                        )
                     )
 
-                    if len(text) > 3000:
+                    if (
+                        article_response.status_code
+                        != 200
+                    ):
                         continue
 
-                    if (
-                        "Hindi" in text
-                        or "Episode" in text
-                        or "Season" in text
-                        or "EP" in text
-                    ):
-                        break
-
-                text = container.get_text(
-                    " ",
-                    strip=True
-                )
-
-                clean_title = self._clean_title(
-                    title
-                )
-
-                return {
-                    "name": clean_title,
-
-                    "hindi_dub": (
-                        "Available"
-                        if re.search(
-                            r"\bHindi\b",
-                            text,
-                            re.I
+                    article_soup = (
+                        BeautifulSoup(
+                            article_response.text,
+                            "html.parser"
                         )
-                        else "Not Mentioned"
-                    ),
+                    )
 
-                    "platform": None,
+                    result = self._find_anime(
+                        article_soup,
+                        query
+                    )
 
-                    "dub_by": None,
+                    if result:
 
-                    "hindi_details": (
-                        "Hindi language listed "
-                        "on AnimeDubHindi schedule."
-                        if re.search(
-                            r"\bHindi\b",
-                            text,
-                            re.I
+                        # Keep source as name only.
+                        result["source"] = (
+                            "AnimeDubHindi"
                         )
-                        else None
-                    ),
 
-                    "studio": None,
+                        result["source_link"] = None
 
-                    "season": self._extract_season(
-                        text
-                    ),
+                        return result
 
-                    "episodes": self._extract_episode(
-                        text
-                    ),
-
-                    "languages": self._languages_string(
-                        self._extract_languages(
-                            text
-                        )
-                    ),
-
-                    "schedule": self._extract_schedule(
-                        text
-                    ),
-
-                    "release_date": self._extract_date(
-                        text
-                    ),
-
-                    "source": "AnimeDubHindi",
-
-                    "source_link": SCHEDULE_URL,
-
-                    "poster_url": None,
-
-                    "mal_url": None,
-
-                    "detail_url": (
-                        element.get("href")
-                        if element.name == "a"
-                        else None
-                    ),
-
-                    "raw_text": text,
-                }
+                except Exception:
+                    continue
 
         except Exception as exc:
 
-            logger.warning(
-                "Schedule search failed: %s",
+            logger.debug(
+                "AnimeDubHindi search failed: %s",
                 exc
             )
 
         return None
 
-    # ===============================================================
-    # SITE PAGE SEARCH
-    # ===============================================================
+    # =================================================================
+    # FIND ANIME IN PAGE
+    # =================================================================
 
-    def _search_site_pages(
+    def _find_anime(
         self,
+        soup: BeautifulSoup,
         query: str
     ) -> Optional[Dict]:
 
-        for page_url in SEARCH_PAGES:
+        elements = soup.find_all(
+            [
+                "h1",
+                "h2",
+                "h3",
+                "h4",
+                "h5",
+                "a",
+                "strong",
+                "b",
+            ]
+        )
 
-            try:
+        best_element = None
 
-                response = self.session.get(
-                    page_url,
-                    timeout=15
-                )
+        # -------------------------------------------------------------
+        # Find title
+        # -------------------------------------------------------------
 
-                if response.status_code != 200:
-                    continue
+        for element in elements:
 
-                soup = BeautifulSoup(
-                    response.text,
-                    "html.parser"
-                )
-
-                # WordPress-style article links.
-                links = soup.find_all(
-                    "a",
-                    href=True
-                )
-
-                for link in links:
-
-                    title = link.get_text(
-                        " ",
-                        strip=True
-                    )
-
-                    if not title:
-                        continue
-
-                    if len(title) > 250:
-                        continue
-
-                    if not self._title_matches(
-                        title,
-                        query
-                    ):
-                        continue
-
-                    href = link.get(
-                        "href"
-                    )
-
-                    if not href:
-                        continue
-
-                    detail_url = urljoin(
-                        BASE_URL,
-                        href
-                    )
-
-                    clean_title = (
-                        self._clean_title_from_post_title(
-                            title
-                        )
-                    )
-
-                    return {
-                        "name": clean_title,
-                        "hindi_dub": "Available",
-                        "platform": None,
-                        "dub_by": None,
-                        "hindi_details": (
-                            "Hindi language listed "
-                            "on AnimeDubHindi."
-                        ),
-                        "studio": None,
-                        "season": None,
-                        "episodes": None,
-                        "languages": None,
-                        "schedule": None,
-                        "release_date": None,
-                        "source": "AnimeDubHindi",
-                        "source_link": SCHEDULE_URL,
-                        "poster_url": None,
-                        "mal_url": None,
-                        "detail_url": detail_url,
-                        "raw_text": title,
-                    }
-
-            except Exception as exc:
-
-                logger.debug(
-                    "Site page search failed %s: %s",
-                    page_url,
-                    exc
-                )
-
-        return None
-
-    # ===============================================================
-    # DETAIL PAGE
-    # ===============================================================
-
-    def _get_detail_information(
-        self,
-        detail_url: str,
-        anime_name: str
-    ) -> Optional[Dict]:
-        """
-        Read metadata from the anime article page.
-
-        Only text metadata is extracted.
-        No episode/file links are used.
-        """
-
-        try:
-
-            response = self.session.get(
-                detail_url,
-                timeout=20
-            )
-
-            response.raise_for_status()
-
-            soup = BeautifulSoup(
-                response.text,
-                "html.parser"
-            )
-
-            # Remove scripts/styles.
-            for tag in soup.find_all(
-                ["script", "style", "noscript"]
-            ):
-                tag.decompose()
-
-            text = soup.get_text(
+            title = element.get_text(
                 " ",
                 strip=True
             )
 
-            # -------------------------------------------------------
-            # Official Dub By
-            # -------------------------------------------------------
+            if not title:
+                continue
 
-            dub_by = self._extract_dub_by(
-                text
-            )
+            if len(title) > 250:
+                continue
 
-            # -------------------------------------------------------
-            # Platform
-            # -------------------------------------------------------
+            if self._title_matches(
+                title,
+                query
+            ):
 
-            platform = self._extract_platform(
-                text
-            )
+                best_element = element
+                break
 
-            # -------------------------------------------------------
-            # Sometimes platform is encoded in title.
-            # -------------------------------------------------------
-
-            if not platform:
-
-                platform = self._detect_platform(
-                    soup.title.get_text(
-                        " ",
-                        strip=True
-                    )
-                    if soup.title
-                    else ""
-                )
-
-            # -------------------------------------------------------
-            # Languages
-            # -------------------------------------------------------
-
-            languages = self._extract_languages(
-                text
-            )
-
-            # -------------------------------------------------------
-            # Season / Episode
-            # -------------------------------------------------------
-
-            season = self._extract_season(
-                text
-            )
-
-            episode = self._extract_episode(
-                text
-            )
-
-            # -------------------------------------------------------
-            # Date
-            # -------------------------------------------------------
-
-            release_date = self._extract_date(
-                text
-            )
-
-            return {
-                "platform": platform,
-
-                "dub_by": dub_by,
-
-                "hindi_details": (
-                    f"Official Dub By: {dub_by}"
-                    if dub_by
-                    else (
-                        "Hindi language listed "
-                        "on AnimeDubHindi."
-                    )
-                ),
-
-                "season": (
-                    season
-                    if season
-                    else None
-                ),
-
-                "episodes": (
-                    episode
-                    if episode
-                    else None
-                ),
-
-                "languages": (
-                    self._languages_string(
-                        languages
-                    )
-                    if languages
-                    else None
-                ),
-
-                "release_date": (
-                    release_date
-                    if release_date
-                    else None
-                ),
-
-                "raw_text": text,
-            }
-
-        except Exception as exc:
-
-            logger.warning(
-                "Detail page failed for %s: %s",
-                anime_name,
-                exc
-            )
-
+        if best_element is None:
             return None
 
-    # ===============================================================
-    # DUB BY
-    # ===============================================================
+        title = best_element.get_text(
+            " ",
+            strip=True
+        )
 
-    @staticmethod
-    def _extract_dub_by(
-        text: str
-    ) -> Optional[str]:
-        """
-        Extract explicitly written Official Dub By / Dub By.
-        """
+        # -------------------------------------------------------------
+        # Find useful information container
+        # -------------------------------------------------------------
 
-        patterns = [
-            r"Official\s+Dub\s+By\s*[:\-]?\s*"
-            r"(.{1,100}?)(?=\s+(?:Encoder|Quality|"
-            r"Subtitle|Audio|Genres|Total|IMDb|$))",
+        container = best_element
 
-            r"Dubbed\s+By\s*[:\-]?\s*"
-            r"(.{1,100}?)(?=\s+(?:Encoder|Quality|"
-            r"Subtitle|Audio|Genres|Total|IMDb|$))",
+        for _ in range(10):
 
-            r"Dub\s+By\s*[:\-]?\s*"
-            r"(.{1,100}?)(?=\s+(?:Encoder|Quality|"
-            r"Subtitle|Audio|Genres|Total|IMDb|$))",
+            if container.parent is None:
+                break
 
-            r"Official\s+Dubbing\s+By\s*[:\-]?\s*"
-            r"(.{1,100}?)(?=\s+(?:Encoder|Quality|"
-            r"Subtitle|Audio|Genres|Total|IMDb|$))",
-        ]
+            container = container.parent
 
-        for pattern in patterns:
-
-            match = re.search(
-                pattern,
-                text,
-                re.I
+            text = container.get_text(
+                " ",
+                strip=True
             )
 
-            if match:
+            if len(text) > 5000:
+                continue
 
-                value = match.group(1).strip()
+            useful = (
+                re.search(
+                    r"\bHindi\b",
+                    text,
+                    re.I
+                )
+                or re.search(
+                    r"\bEpisode\b",
+                    text,
+                    re.I
+                )
+                or re.search(
+                    r"\bEP\b",
+                    text,
+                    re.I
+                )
+                or re.search(
+                    r"\bSeason\b",
+                    text,
+                    re.I
+                )
+                or re.search(
+                    r"\bDubbed\b",
+                    text,
+                    re.I
+                )
+                or re.search(
+                    r"\bPlatform\b",
+                    text,
+                    re.I
+                )
+            )
 
-                value = re.sub(
-                    r"\s+",
+            if useful:
+                break
+
+        text = container.get_text(
+            " ",
+            strip=True
+        )
+
+        if len(text) > 5000:
+
+            parent = best_element.parent
+
+            if parent:
+
+                text = parent.get_text(
                     " ",
-                    value
+                    strip=True
                 )
 
-                value = value.strip(
-                    " :-|•,"
+        languages = (
+            self._extract_languages(
+                text
+            )
+        )
+
+        clean_title = (
+            self._clean_title(
+                title
+            )
+        )
+
+        return {
+            "name": clean_title,
+
+            "hindi_dub": (
+                "Available"
+                if "Hindi" in languages
+                else "Not Mentioned"
+            ),
+
+            "platform": (
+                self._extract_platform(
+                    text
                 )
+            ),
 
-                if value and len(value) < 100:
+            "dub_by": (
+                self._extract_dub_by(
+                    text
+                )
+            ),
 
-                    return value
+            "studio": None,
 
-        return None
+            "hindi_details": (
+                "Hindi language listed on "
+                "AnimeDubHindi."
+                if "Hindi" in languages
+                else None
+            ),
 
-    # ===============================================================
-    # PLATFORM FALLBACK
-    # ===============================================================
+            "episodes": (
+                self._extract_episode(
+                    text
+                )
+            ),
+
+            "season": (
+                self._extract_season(
+                    text
+                )
+            ),
+
+            "languages": (
+                " • ".join(languages)
+                if languages
+                else None
+            ),
+
+            "schedule": (
+                self._extract_schedule(
+                    text
+                )
+            ),
+
+            "release_date": (
+                self._extract_date(
+                    text
+                )
+            ),
+
+            "source": (
+                "AnimeDubHindi"
+            ),
+
+            # Never display source URL.
+            "source_link": None,
+
+            "poster_url": None,
+
+            "mal_url": None,
+        }
+
+    # =================================================================
+    # PLATFORM
+    # =================================================================
 
     @staticmethod
-    def _detect_platform(
+    def _extract_platform(
         text: str
     ) -> Optional[str]:
 
-        if not text:
-            return None
+        platforms = [
+            "Crunchyroll",
+            "Netflix",
+            "JioHotstar",
+            "Jio Hotstar",
+            "Amazon Prime Video",
+            "Prime Video",
+            "Sony YAY",
+            "Sony Yay",
+            "MX Player",
+            "YouTube",
+            "Disney+",
+            "Disney Plus",
+            "Animax",
+        ]
 
         found = []
 
-        for platform in PLATFORM_NAMES:
+        for platform in platforms:
 
             if re.search(
-                re.escape(platform),
-                text,
-                re.I
-            ):
-
-                found.append(
-                    platform
-                )
-
-        for abbreviation, platform in (
-            PLATFORM_ABBREVIATIONS.items()
-        ):
-
-            if re.search(
-                rf"\b{re.escape(abbreviation)}\b",
+                rf"\b{re.escape(platform)}\b",
                 text,
                 re.I
             ):
@@ -789,12 +656,71 @@ class AnimeScraper:
             return None
 
         return " • ".join(
-            dict.fromkeys(found)
+            dict.fromkeys(
+                found
+            )
         )
 
-    # ===============================================================
+    # =================================================================
+    # DUB BY
+    # =================================================================
+
+    @staticmethod
+    def _extract_dub_by(
+        text: str
+    ) -> Optional[str]:
+
+        patterns = [
+
+            r"Dubbed\s*by\s*[:\-]?\s*"
+            r"([^|•\n]+)",
+
+            r"Dub\s*by\s*[:\-]?\s*"
+            r"([^|•\n]+)",
+
+            r"Dubbing\s*by\s*[:\-]?\s*"
+            r"([^|•\n]+)",
+
+            r"Dubbing\s*Studio\s*[:\-]?\s*"
+            r"([^|•\n]+)",
+
+            r"Dub\s*Studio\s*[:\-]?\s*"
+            r"([^|•\n]+)",
+        ]
+
+        for pattern in patterns:
+
+            match = re.search(
+                pattern,
+                text,
+                re.I
+            )
+
+            if match:
+
+                value = (
+                    match.group(1)
+                    .strip()
+                )
+
+                value = re.sub(
+                    r"\s+",
+                    " ",
+                    value
+                )
+
+                # Prevent accidentally returning huge text.
+                if len(value) > 150:
+                    value = value[:150].strip()
+
+                if value:
+                    return value
+
+        return None
+
+    # =================================================================
     # MAL / JIKAN
-    # ===============================================================
+    # =================================================================
 
     def _get_mal_info(
         self,
@@ -829,15 +755,22 @@ class AnimeScraper:
 
             selected = None
 
-            # Exact match first.
+            # ---------------------------------------------------------
+            # Exact title
+            # ---------------------------------------------------------
+
             for anime in data:
 
-                for title in self._get_titles(
-                    anime
+                for title in (
+                    self._get_titles(
+                        anime
+                    )
                 ):
 
                     if (
-                        self._normalize(title)
+                        self._normalize(
+                            title
+                        )
                         == query
                     ):
 
@@ -847,20 +780,29 @@ class AnimeScraper:
                 if selected:
                     break
 
-            # Word match fallback.
+            # ---------------------------------------------------------
+            # Partial title
+            # ---------------------------------------------------------
+
             if selected is None:
 
                 for anime in data:
 
-                    titles = self._get_titles(
-                        anime
-                    )
+                    for title in (
+                        self._get_titles(
+                            anime
+                        )
+                    ):
 
-                    for title in titles:
+                        normalized = (
+                            self._normalize(
+                                title
+                            )
+                        )
 
-                        if self._title_matches(
-                            title,
-                            query
+                        if (
+                            query in normalized
+                            or normalized in query
                         ):
 
                             selected = anime
@@ -869,13 +811,12 @@ class AnimeScraper:
                     if selected:
                         break
 
-            # Final fallback.
             if selected is None:
                 selected = data[0]
 
-            # -------------------------------------------------------
-            # POSTER
-            # -------------------------------------------------------
+            # ---------------------------------------------------------
+            # Poster
+            # ---------------------------------------------------------
 
             images = selected.get(
                 "images",
@@ -896,78 +837,74 @@ class AnimeScraper:
                 )
             )
 
-            # -------------------------------------------------------
-            # MAL URL
-            # -------------------------------------------------------
+            # ---------------------------------------------------------
+            # Studio
+            # ---------------------------------------------------------
 
-            mal_url = selected.get(
-                "url"
+            studios = selected.get(
+                "studios",
+                []
             )
-
-            # -------------------------------------------------------
-            # STUDIO
-            # -------------------------------------------------------
 
             studio_names = []
 
-            for item in selected.get(
-                "studios",
-                []
-            ):
+            for item in studios:
 
-                if isinstance(
+                if not isinstance(
                     item,
                     dict
                 ):
+                    continue
 
-                    name = item.get(
-                        "name"
+                studio_name = item.get(
+                    "name"
+                )
+
+                if studio_name:
+                    studio_names.append(
+                        studio_name
                     )
 
-                    if name:
-                        studio_names.append(
-                            name
-                        )
+            studio = None
 
-            studio = (
-                " • ".join(
+            if studio_names:
+
+                studio = " • ".join(
                     dict.fromkeys(
                         studio_names
                     )
                 )
-                if studio_names
-                else None
-            )
 
             return {
+                "name": (
+                    selected.get(
+                        "title"
+                    )
+                    or anime_name
+                ),
+
                 "poster_url": poster,
+
                 "studio": studio,
-                "mal_url": mal_url,
+
+                "mal_url": selected.get(
+                    "url"
+                ),
             }
-
-        except requests.RequestException as exc:
-
-            logger.warning(
-                "Jikan request failed for %s: %s",
-                anime_name,
-                exc
-            )
-
-            return None
 
         except Exception as exc:
 
             logger.warning(
-                "MAL information error for %s: %s",
+                "Jikan error for %s: %s",
                 anime_name,
                 exc
             )
 
             return None
 
-    # ===============================================================
+    # =================================================================
     # TITLES
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _get_titles(
@@ -1012,9 +949,9 @@ class AnimeScraper:
 
         return titles
 
-    # ===============================================================
+    # =================================================================
     # NORMALIZE
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _normalize(
@@ -1038,9 +975,9 @@ class AnimeScraper:
             text.split()
         )
 
-    # ===============================================================
+    # =================================================================
     # TITLE MATCH
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _title_matches(
@@ -1087,9 +1024,9 @@ class AnimeScraper:
             title_words
         )
 
-    # ===============================================================
+    # =================================================================
     # CLEAN TITLE
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _clean_title(
@@ -1112,34 +1049,9 @@ class AnimeScraper:
 
         return title.strip()
 
-    @staticmethod
-    def _clean_title_from_post_title(
-        title: str
-    ) -> str:
-
-        # Remove common metadata after anime name.
-        patterns = [
-            r"\s+Season\s+\d+.*$",
-            r"\s+S\d+.*$",
-            r"\s+Hindi.*$",
-        ]
-
-        cleaned = title
-
-        for pattern in patterns:
-
-            cleaned = re.sub(
-                pattern,
-                "",
-                cleaned,
-                flags=re.I
-            )
-
-        return cleaned.strip()
-
-    # ===============================================================
+    # =================================================================
     # SEASON
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _extract_season(
@@ -1149,7 +1061,6 @@ class AnimeScraper:
         patterns = [
             r"\bSeason\s*([0-9]+)\b",
             r"\bS([0-9]+)\b",
-            r"\bSeason\s*([0-9]+)\s*Part",
         ]
 
         for pattern in patterns:
@@ -1167,25 +1078,11 @@ class AnimeScraper:
                     f"{match.group(1)}"
                 )
 
-        # Handle S1 P4 style.
-        match = re.search(
-            r"\bS([0-9]+)\s+P([0-9]+)\b",
-            text,
-            re.I
-        )
-
-        if match:
-
-            return (
-                f"Season {match.group(1)} "
-                f"Part {match.group(2)}"
-            )
-
         return None
 
-    # ===============================================================
+    # =================================================================
     # EPISODE
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _extract_episode(
@@ -1207,14 +1104,13 @@ class AnimeScraper:
             )
 
             if match:
-
                 return match.group(1)
 
         return None
 
-    # ===============================================================
+    # =================================================================
     # LANGUAGES
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _extract_languages(
@@ -1225,15 +1121,8 @@ class AnimeScraper:
             "Hindi",
             "Tamil",
             "Telugu",
-            "Bangla",
-            "Bengali",
             "English",
             "Japanese",
-            "Chinese",
-            "Korean",
-            "Malayalam",
-            "Kannada",
-            "Marathi",
         ]
 
         found = []
@@ -1246,36 +1135,15 @@ class AnimeScraper:
                 re.I
             ):
 
-                # Normalize Bengali naming.
-                if (
-                    language == "Bengali"
-                    and "Bangla" in found
-                ):
-                    continue
-
                 found.append(
                     language
                 )
 
         return found
 
-    @staticmethod
-    def _languages_string(
-        languages: List[str]
-    ) -> Optional[str]:
-
-        if not languages:
-            return None
-
-        return " • ".join(
-            dict.fromkeys(
-                languages
-            )
-        )
-
-    # ===============================================================
+    # =================================================================
     # SCHEDULE
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _extract_schedule(
@@ -1316,9 +1184,9 @@ class AnimeScraper:
 
         return None
 
-    # ===============================================================
+    # =================================================================
     # DATE
-    # ===============================================================
+    # =================================================================
 
     @staticmethod
     def _extract_date(
@@ -1357,22 +1225,23 @@ class AnimeScraper:
         return None
 
 
-# ===================================================================
+# =====================================================================
 # SINGLE INSTANCE
-# ===================================================================
+# =====================================================================
 
 anime_scraper = AnimeScraper()
 
 
-# ===================================================================
+# =====================================================================
 # PUBLIC FUNCTION
-# ===================================================================
+# =====================================================================
 
 def get_anime_info(
     anime_name: str
 ) -> Optional[Dict]:
-    """Public function used by commands.py."""
 
     return anime_scraper.search_anime(
         anime_name
-        )
+    )
+
+  
