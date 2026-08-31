@@ -481,7 +481,7 @@ def _format_anime_info(
     # ---------------------------------------------------------------
 
     response += (
-        "\n🔎 <b>Source:</b> AnimeDubHindi"
-    )
+    "\n🔎 <b>Source:</b> DC"
+)
 
     return response
