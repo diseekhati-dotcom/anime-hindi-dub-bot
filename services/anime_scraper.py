@@ -2621,8 +2621,8 @@ def _extract_season(
         )
 
         return (
-            " , ".join(
-                ordered
+            ", ".join(
+               ordered
             )
             if ordered
             else None
