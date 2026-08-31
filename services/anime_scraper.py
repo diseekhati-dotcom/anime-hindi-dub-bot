@@ -5,6 +5,18 @@ Sources:
 - AnimeDubHindi schedule: anime metadata
 - MyAnimeList poster: through Jikan API
 
+Provides:
+- Anime name
+- Hindi dub status
+- Platform, when explicitly available
+- Dubbed by / dubbing studio, when explicitly available
+- Season
+- Episode
+- Languages
+- Schedule
+- Release date
+- MAL poster through Jikan
+
 No anime episodes, watch links, or download links
 are downloaded, stored, or distributed.
 """
@@ -22,8 +34,13 @@ from utils.logger import logger
 # URLs
 # ===================================================================
 
-SCHEDULE_URL = "https://www.animedubhindi.link/schedule.php"
-JIKAN_URL = "https://api.jikan.moe/v4/anime"
+SCHEDULE_URL = (
+    "https://www.animedubhindi.link/schedule.php"
+)
+
+JIKAN_URL = (
+    "https://api.jikan.moe/v4/anime"
+)
 
 
 # ===================================================================
@@ -34,6 +51,7 @@ class AnimeScraper:
     """Anime information lookup service."""
 
     def __init__(self) -> None:
+
         self.session = requests.Session()
 
         self.session.headers.update({
@@ -75,6 +93,7 @@ class AnimeScraper:
         )
 
         try:
+
             response = self.session.get(
                 SCHEDULE_URL,
                 timeout=20
@@ -93,10 +112,12 @@ class AnimeScraper:
             )
 
             if not result:
+
                 logger.info(
-                    "Anime not found: %s",
+                    "Anime not found in AnimeDubHindi schedule: %s",
                     anime_name
                 )
+
                 return None
 
             # -------------------------------------------------------
@@ -112,18 +133,22 @@ class AnimeScraper:
             return result
 
         except requests.RequestException as exc:
+
             logger.error(
                 "AnimeDubHindi request failed: %s",
                 exc
             )
+
             return None
 
         except Exception as exc:
+
             logger.error(
                 "Anime search error: %s",
                 exc,
                 exc_info=True
             )
+
             return None
 
     # ===============================================================
@@ -135,7 +160,17 @@ class AnimeScraper:
         soup: BeautifulSoup,
         query: str
     ) -> Optional[Dict]:
-        """Find anime information from the schedule page."""
+        """
+        Find matching anime on the schedule page.
+
+        The schedule currently uses heading elements for
+        anime titles, so headings are preferred over every
+        link on the page.
+        """
+
+        # -----------------------------------------------------------
+        # First search actual heading elements.
+        # -----------------------------------------------------------
 
         elements = soup.find_all(
             [
@@ -144,9 +179,16 @@ class AnimeScraper:
                 "h3",
                 "h4",
                 "h5",
-                "a"
             ]
         )
+
+        # -----------------------------------------------------------
+        # If headings are unavailable, search links.
+        # -----------------------------------------------------------
+
+        if not elements:
+
+            elements = soup.find_all("a")
 
         for element in elements:
 
@@ -158,7 +200,6 @@ class AnimeScraper:
             if not title:
                 continue
 
-            # Ignore extremely large pieces of page text.
             if len(title) > 200:
                 continue
 
@@ -174,7 +215,9 @@ class AnimeScraper:
 
             container = element
 
-            for _ in range(7):
+            best_text = ""
+
+            for _ in range(8):
 
                 if container.parent is None:
                     break
@@ -186,43 +229,45 @@ class AnimeScraper:
                     strip=True
                 )
 
-                if (
-                    re.search(
-                        r"\bHindi\b",
-                        text,
-                        re.I
-                    )
-                    or re.search(
-                        r"\bSeason\b",
-                        text,
-                        re.I
-                    )
-                    or re.search(
-                        r"\bEpisode\b",
-                        text,
-                        re.I
-                    )
-                    or re.search(
-                        r"\bEP\b",
-                        text,
-                        re.I
-                    )
-                ):
-                    break
+                # Keep the smallest useful container.
+                if 30 <= len(text) <= 2500:
 
-            text = container.get_text(
-                " ",
-                strip=True
-            )
+                    best_text = text
 
-            # Prevent the complete webpage from being parsed.
-            if len(text) > 3000:
+                    if (
+                        re.search(
+                            r"\bHindi\b",
+                            text,
+                            re.I
+                        )
+                        or re.search(
+                            r"\bSeason\b",
+                            text,
+                            re.I
+                        )
+                        or re.search(
+                            r"\bEpisode\b",
+                            text,
+                            re.I
+                        )
+                        or re.search(
+                            r"\bEP\b",
+                            text,
+                            re.I
+                        )
+                    ):
+                        break
 
-                if element.parent:
-                    text = element.parent.get_text(
-                        " ",
-                        strip=True
-                    )
+            if best_text:
+
+                text = best_text
+
+            else:
+
+                text = element.get_text(
+                    " ",
+                    strip=True
+                )
 
             # -------------------------------------------------------
             # EXTRACT INFORMATION
@@ -252,6 +297,20 @@ class AnimeScraper:
                 title
             )
 
+            # -------------------------------------------------------
+            # PLATFORM / DUB BY
+            # -------------------------------------------------------
+
+            platform = self._extract_platform(
+                text,
+                element
+            )
+
+            dub_by = self._extract_dub_by(
+                text,
+                element
+            )
+
             return {
                 "name": clean_title,
 
@@ -261,15 +320,9 @@ class AnimeScraper:
                     else "Not Mentioned"
                 ),
 
-                # These are populated when the source
-                # provides platform/dubbing information.
-                "platform": self._extract_platform(
-                    text
-                ),
+                "platform": platform,
 
-                "dub_by": self._extract_dub_by(
-                    text
-                ),
+                "dub_by": dub_by,
 
                 "hindi_details": (
                     "Hindi language listed on "
@@ -307,11 +360,12 @@ class AnimeScraper:
 
     @staticmethod
     def _extract_platform(
-        text: str
+        text: str,
+        element=None
     ) -> Optional[str]:
         """
-        Extract a streaming platform when explicitly
-        mentioned in the schedule text.
+        Extract a streaming platform only when it is
+        explicitly present in the source HTML/text.
         """
 
         platforms = [
@@ -330,6 +384,7 @@ class AnimeScraper:
             "Animax",
         ]
 
+        # Search visible text.
         for platform in platforms:
 
             if re.search(
@@ -339,6 +394,28 @@ class AnimeScraper:
             ):
                 return platform
 
+        # Search attributes around the anime element.
+        if element is not None:
+
+            try:
+
+                attributes_text = " ".join(
+                    str(value)
+                    for value in element.attrs.values()
+                )
+
+                for platform in platforms:
+
+                    if re.search(
+                        rf"\b{re.escape(platform)}\b",
+                        attributes_text,
+                        re.I
+                    ):
+                        return platform
+
+            except Exception:
+                pass
+
         return None
 
     # ===============================================================
@@ -347,18 +424,27 @@ class AnimeScraper:
 
     @staticmethod
     def _extract_dub_by(
-        text: str
+        text: str,
+        element=None
     ) -> Optional[str]:
         """
-        Extract dubbing studio/network if explicitly
-        mentioned in the schedule text.
+        Extract dubbing studio/network only when
+        explicitly mentioned by the source.
         """
 
         patterns = [
-            r"Dubbed\s*by\s*[:\-]?\s*([^|•,\n]+)",
-            r"Dub\s*by\s*[:\-]?\s*([^|•,\n]+)",
-            r"Dubbing\s*by\s*[:\-]?\s*([^|•,\n]+)",
-            r"Dubbing\s*Studio\s*[:\-]?\s*([^|•,\n]+)",
+
+            r"Dubbed\s*by\s*[:\-]?\s*([^|•\n]+)",
+
+            r"Dub\s*by\s*[:\-]?\s*([^|•\n]+)",
+
+            r"Dubbing\s*by\s*[:\-]?\s*([^|•\n]+)",
+
+            r"Dubbing\s*Studio\s*[:\-]?\s*([^|•\n]+)",
+
+            r"Dubbing\s*Studio\s*Name\s*[:\-]?\s*([^|•\n]+)",
+
+            r"Studio\s*[:\-]?\s*([^|•\n]+)",
         ]
 
         for pattern in patterns:
@@ -373,8 +459,43 @@ class AnimeScraper:
 
                 value = match.group(1).strip()
 
-                if value:
+                value = re.sub(
+                    r"\s+",
+                    " ",
+                    value
+                )
+
+                if value and len(value) <= 100:
+
                     return value
+
+        # Check nearby element attributes too.
+        if element is not None:
+
+            try:
+
+                attributes_text = " ".join(
+                    str(value)
+                    for value in element.attrs.values()
+                )
+
+                for pattern in patterns:
+
+                    match = re.search(
+                        pattern,
+                        attributes_text,
+                        re.I
+                    )
+
+                    if match:
+
+                        value = match.group(1).strip()
+
+                        if value and len(value) <= 100:
+                            return value
+
+            except Exception:
+                pass
 
         return None
 
@@ -387,10 +508,10 @@ class AnimeScraper:
         anime_name: str
     ) -> Optional[str]:
         """
-        Get the MyAnimeList poster URL through Jikan.
+        Get the MyAnimeList poster through Jikan.
 
-        The bot only receives the remote URL.
-        It does not permanently store the image.
+        Only the remote image URL is returned.
+        The bot does not permanently store the image.
         """
 
         try:
@@ -433,7 +554,7 @@ class AnimeScraper:
             selected = None
 
             # -------------------------------------------------------
-            # EXACT MATCH FIRST
+            # EXACT TITLE MATCH
             # -------------------------------------------------------
 
             for anime in data:
@@ -446,6 +567,7 @@ class AnimeScraper:
                         self._normalize(title)
                         == query
                     ):
+
                         selected = anime
                         break
 
@@ -453,10 +575,41 @@ class AnimeScraper:
                     break
 
             # -------------------------------------------------------
-            # FALLBACK
+            # WORD-BASED MATCH
             # -------------------------------------------------------
 
             if selected is None:
+
+                query_words = set(
+                    query.split()
+                )
+
+                for anime in data:
+
+                    for title in self._get_titles(
+                        anime
+                    ):
+
+                        title_words = set(
+                            self._normalize(title).split()
+                        )
+
+                        if query_words.issubset(
+                            title_words
+                        ):
+
+                            selected = anime
+                            break
+
+                    if selected:
+                        break
+
+            # -------------------------------------------------------
+            # FALLBACK TO FIRST RESULT
+            # -------------------------------------------------------
+
+            if selected is None:
+
                 selected = data[0]
 
             # -------------------------------------------------------
@@ -476,6 +629,7 @@ class AnimeScraper:
             poster = (
                 jpg.get("large_image_url")
                 or jpg.get("image_url")
+                or jpg.get("small_image_url")
             )
 
             if poster:
@@ -509,7 +663,8 @@ class AnimeScraper:
             logger.warning(
                 "Poster error for %s: %s",
                 anime_name,
-                exc
+                exc,
+                exc_info=True
             )
 
             return None
@@ -522,34 +677,43 @@ class AnimeScraper:
     def _get_titles(
         anime: Dict
     ) -> list:
-        """Return useful MAL/Jikan titles."""
+        """Return useful titles from Jikan/MAL."""
 
         titles = []
 
         for key in (
             "title",
             "title_english",
-            "title_japanese"
+            "title_japanese",
         ):
 
             value = anime.get(key)
 
             if value:
-                titles.append(value)
+
+                titles.append(
+                    value
+                )
 
         for item in anime.get(
             "titles",
             []
         ):
 
-            if isinstance(item, dict):
+            if isinstance(
+                item,
+                dict
+            ):
 
                 value = item.get(
                     "title"
                 )
 
                 if value:
-                    titles.append(value)
+
+                    titles.append(
+                        value
+                    )
 
         return titles
 
@@ -563,10 +727,23 @@ class AnimeScraper:
     ) -> str:
         """Normalize an anime title."""
 
+        if not text:
+            return ""
+
         text = text.lower()
 
         text = text.replace(
             "-",
+            " "
+        )
+
+        text = text.replace(
+            "–",
+            " "
+        )
+
+        text = text.replace(
+            "—",
             " "
         )
 
@@ -671,7 +848,7 @@ class AnimeScraper:
 
         patterns = [
             r"\bSeason\s*([0-9]+)\b",
-            r"\bS([0-9]+)\b",
+            r"\bS\s*([0-9]+)\b",
         ]
 
         for pattern in patterns:
@@ -749,7 +926,9 @@ class AnimeScraper:
                 re.I
             ):
 
-                found.append(language)
+                found.append(
+                    language
+                )
 
         return found
 
@@ -809,6 +988,7 @@ class AnimeScraper:
 
         patterns = [
 
+            # 01 Oct 2026
             (
                 r"\b\d{1,2}\s+"
                 r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|"
@@ -816,12 +996,14 @@ class AnimeScraper:
                 r"\s+\d{4}\b"
             ),
 
+            # Oct 01, 2026
             (
                 r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|"
                 r"Sep|Oct|Nov|Dec)"
                 r"\s+\d{1,2},\s+\d{4}\b"
             ),
 
+            # 01/10/2026
             r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
         ]
 
@@ -854,7 +1036,11 @@ anime_scraper = AnimeScraper()
 def get_anime_info(
     anime_name: str
 ) -> Optional[Dict]:
-    """Public function used by commands.py."""
+    """
+    Public function used by commands.py.
+
+    Returns anime information dictionary or None.
+    """
 
     return anime_scraper.search_anime(
         anime_name
