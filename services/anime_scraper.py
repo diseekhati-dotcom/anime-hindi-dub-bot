@@ -95,6 +95,7 @@ OFFICIAL_SOURCES = {
     ],
 }
 
+
 # =====================================================================
 # PLATFORM TAGS FOUND ON ANIME DUB HINDI
 # =====================================================================
@@ -178,7 +179,7 @@ class AnimeScraper:
                     "en-IN,en;q=0.9"
                 ),
             }
-)
+        )
 
     # =================================================================
     # MAIN SEARCH
@@ -620,6 +621,7 @@ class AnimeScraper:
                         full_url
                     )
                 )
+
             # ---------------------------------------------------------
             # Try article pages.
             # ---------------------------------------------------------
@@ -767,7 +769,7 @@ class AnimeScraper:
             )
 
         return None
-   
+
     # =================================================================
     # PARSE MATCHING PAGE
     # =================================================================
@@ -916,7 +918,8 @@ class AnimeScraper:
             title,
             text,
             detail_url
-            )
+        )
+
     # =================================================================
     # PARSE DETAIL PAGE
     # =================================================================
@@ -1008,7 +1011,6 @@ class AnimeScraper:
 
             return None
 
-    
     # =================================================================
     # BUILD RESULT
     # =================================================================
@@ -1138,7 +1140,7 @@ class AnimeScraper:
         if not found:
             return None
 
-        return " â€¢ ".join(
+        return " • ".join(
             dict.fromkeys(
                 found
             )
@@ -1175,7 +1177,7 @@ class AnimeScraper:
         platforms = [
             item.strip()
             for item in platform.split(
-                " â€¢ "
+                " • "
             )
         ]
 
@@ -1477,7 +1479,7 @@ class AnimeScraper:
 
             return {
                 "name": self._clean_mirchi_title(title),
-                "platform": " â€¢ ".join(platforms) if platforms else None,
+                "platform": " • ".join(platforms) if platforms else None,
                 "platform_entries": self._dedupe_platform_entries(entries),
                 "dub_by": dub_by,
                 "hindi_dub": (
@@ -1502,7 +1504,7 @@ class AnimeScraper:
     ) -> str:
 
         value = re.sub(
-            r"\s+[-|â€“]\s+Anime Mirchi.*$",
+            r"\s+[-|–]\s+Anime Mirchi.*$",
             "",
             title or "",
             flags=re.I
@@ -1605,7 +1607,7 @@ class AnimeScraper:
                     r"\s+",
                     " ",
                     match.group(1)
-                ).strip(" :-|â€¢,")
+                ).strip(" :-|•,")
 
                 if value and len(value) <= 120:
                     return value
@@ -1769,7 +1771,7 @@ class AnimeScraper:
                 )
             ),
             "dub_by": (
-                " â€¢ ".join(
+                " • ".join(
                     unique_dub_by
                 )
                 if unique_dub_by
@@ -2056,7 +2058,7 @@ class AnimeScraper:
                     )
 
             studio = (
-                " â€¢ ".join(
+                " • ".join(
                     dict.fromkeys(
                         studios
                     )
@@ -2177,7 +2179,7 @@ class AnimeScraper:
                 return value
 
         og_title = soup.find(
-            "meta",
+                        "meta",
             attrs={
                 "property": "og:title"
             }
@@ -2353,7 +2355,7 @@ class AnimeScraper:
         )
 
         title = re.sub(
-            r"\s+[-|â€“]\s+AnimeDubHindi.*$",
+            r"\s+[-|–]\s+AnimeDubHindi.*$",
             "",
             title,
             flags=re.I
@@ -2395,7 +2397,7 @@ class AnimeScraper:
                     r"\s+",
                     " ",
                     match.group(1)
-                ).strip(" :-|â€¢,")
+                ).strip(" :-|•,")
 
                 if value and len(value) <= 120:
                     return value
@@ -2453,7 +2455,7 @@ class AnimeScraper:
                     " ",
                     match.group(1)
                 ).strip(
-                    " :-|â€¢,"
+                    " :-|•,"
                 )
 
                 if (
@@ -2463,72 +2465,71 @@ class AnimeScraper:
                     return value
 
         return None
-        
-# =================================================================  
-# SEASON  
-# =================================================================  
 
-@staticmethod  
-def _season_numbers(  
-    text: str  
-) -> List[str]:  
+    # =================================================================
+    # SEASON
+    # =================================================================
 
-    values = set()  
+    @staticmethod
+    def _season_numbers(
+        text: str
+    ) -> List[str]:
 
-    for value in re.findall(  
-        r"\bSeason\s*([0-9]{1,3})\b",  
-        text or "",  
-        re.I  
-    ):  
+        values = set()
 
-        values.add(  
-            int(value)  
-        )  
+        for value in re.findall(
+            r"\bSeason\s*([0-9]{1,3})\b",
+            text or "",
+            re.I
+        ):
 
-    for value in re.findall(  
-        r"\bS\s*([0-9]{1,3})\b",  
-        text or "",  
-        re.I  
-    ):  
+            values.add(
+                int(value)
+            )
 
-        values.add(  
-            int(value)  
-        )  
+        for value in re.findall(
+            r"\bS\s*([0-9]{1,3})\b",
+            text or "",
+            re.I
+        ):
 
-    return [  
-        str(value)  
-        for value in sorted(  
-            values  
-        )  
-    ]  
+            values.add(
+                int(value)
+            )
 
-@staticmethod  
-def _extract_season(  
-    text: str  
-) -> Optional[str]:  
+        return [
+            str(value)
+            for value in sorted(
+                values
+            )
+        ]
 
-    seasons = (  
-        AnimeScraper._season_numbers(  
-            text  
-        )  
-    )  
+    @staticmethod
+    def _extract_season(
+        text: str
+    ) -> Optional[str]:
 
-    if not seasons:  
-        return None  
+        seasons = (
+            AnimeScraper._season_numbers(
+                text
+            )
+        )
 
-    if len(seasons) > 5:  
-        return (  
-            f"{len(seasons)} Seasons"  
-        )  
+        if not seasons:
+            return None
 
-    return (  
-        "Season "  
-        + ", ".join(  
-            seasons  
-        )  
-    )
+        if len(seasons) > 5:
+            return (
+                f"{len(seasons)} Seasons"
+            )
 
-        
+        return (
+            "Season "
+            + ", ".join(
+                seasons
+            )
+        )
+
     # =================================================================
     # EPISODE
     # =================================================================
@@ -2624,8 +2625,8 @@ def _extract_season(
         )
 
         return (
-            ", ".join(
-               ordered
+            " • ".join(
+                ordered
             )
             if ordered
             else None
@@ -2864,7 +2865,7 @@ def _extract_season(
             )
 
             language_text = (
-                " â€¢ ".join(
+                " • ".join(
                     languages
                 )
                 if languages
@@ -2872,8 +2873,8 @@ def _extract_season(
             )
 
             lines.append(
-                f"â€¢ {label} â€” "
-                f"{season_text} â€” "
+                f"• {label} — "
+                f"{season_text} — "
                 f"{language_text}"
             )
 
@@ -2902,3 +2903,5 @@ def get_anime_info(
     return anime_scraper.search_anime(
         anime_name
     )
+    
+            
