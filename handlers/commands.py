@@ -302,3 +302,4 @@ def _format_anime_info(anime_info: Dict) -> str:
         response += f" • <a href='{mal_url}'>MyAnimeList</a>"
 
     return response
+    
