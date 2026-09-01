@@ -2482,53 +2482,61 @@ class AnimeScraper:
             text or "",
             re.I
         ):
+# =================================================================
+# SEASON
+# =================================================================
 
-            values.add(
-                int(value)
-            )
+@staticmethod
+def _season_numbers(
+    text: str
+) -> List[str]:
 
-        for value in re.findall(
-            r"\bS\s*([0-9]{1,3})\b",
-            text or "",
-            re.I
-        ):
+    values = set()
 
-            values.add(
-                int(value)
-            )
-
-        return [
-            str(value)
-            for value in sorted(
-                values
-            )
-        ]
-
-    @staticmethod
-    def _extract_season(
-        text: str
-    ) -> Optional[str]:
-
-        seasons = (
-            AnimeScraper._season_numbers(
-                text
-            )
+    for value in re.findall(
+        r"\bSeason\s*([0-9]{1,3})\b",
+        text or "",
+        re.I
+    ):
+        values.add(
+            int(value)
         )
 
-        if not seasons:
-            return None
-
-        if len(seasons) > 5:
-            return (
-                f"{len(seasons)} Seasons"
-            )
-
-        return (
-            "Season "
-            + ", ".join(
-                seasons
-            )
+    for value in re.findall(
+        r"\bS\s*([0-9]{1,3})\b",
+        text or "",
+        re.I
+    ):
+        values.add(
+            int(value)
         )
+
+    return [
+        str(value)
+        for value in sorted(values)
+    ]
+
+
+@staticmethod
+def _extract_season(
+    text: str
+) -> Optional[str]:
+
+    seasons = (
+        AnimeScraper._season_numbers(
+            text
+        )
+    )
+
+    if not seasons:
+        return None
+
+    # 5 ya kam seasons
+    if len(seasons) <= 5:
+        return ", ".join(seasons)
+
+    # 5 se zyada seasons
+    return f"{seasons[0]}–{seasons[-1]}"
 
     # =================================================================
     # EPISODE
