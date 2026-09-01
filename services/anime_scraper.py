@@ -1986,7 +1986,7 @@ class AnimeScraper:
     # STATUS MERGING
     # =================================================================
 
-  @staticmethod
+    @staticmethod
     def _merge_statuses(
         statuses: List[str],
     ) -> str:
