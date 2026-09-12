@@ -206,7 +206,7 @@ async def anime_command(
 
     loading_message = await update.message.reply_text(
         f"🔍 Searching for: {anime_name}\n"
-        "⏳ Multiple seasons/series check ho rahi hain..." 
+        "⏳ Seasons, series aur Hindi availability check ho rahi hai..." 
     )
 
     try:
@@ -286,12 +286,15 @@ async def send_anime_with_poster(
     update: Update,
     anime_info: Any,
 ) -> None:
-    """Send poster + anime information in the same Telegram message."""
+    """Send poster + formatted anime information in Telegram."""
     if not update.message:
         return
 
     try:
         if isinstance(anime_info, AnimeInfo):
+            # anime_scraper.py now returns franchise-aware AnimeInfo for
+            # Naruto / Dragon Ball and normal AnimeInfo for other anime.
+            # format_anime_info() handles both formats.
             poster_url = anime_info.poster_url
             caption = format_anime_info(anime_info)
         elif isinstance(anime_info, dict):
