@@ -750,11 +750,16 @@ async def find_anime_page(
     if exact:
         best = exact[0]
     else:
-        good = [c for c in candidates if c.score >= 55]
+        good = [
+            c for c in candidates
+            if c.score >= 70
+        ]
+
         if not good:
             raise AnimeNotFound(
                 f"Anime not confidently matched: {query}"
             )
+
         best = good[0]
 
     logger.info(
@@ -946,13 +951,9 @@ def extract_info_text(
 
             parent = parent.parent
 
-    # Fallback: complete page text
-    return clean_text(
-        soup.get_text(
-            " ",
-            strip=True
-        )
-    )
+    # Do not use complete page text.
+    # It contains menu, footer and recommended posts.
+    return ""
 
 
 # ------------------------------------------------------------
