@@ -159,6 +159,8 @@ class AnimeInfo:
 
     synopsis: Optional[str] = None
 
+    media_type: str = "anime"
+
     episodes: list[Episode] = field(default_factory=list)
 
     # Franchise / multi-series support.
@@ -622,6 +624,14 @@ def title_score(
     if q == c:
         return 100
 
+    q_words = set(q.split())
+    c_words = set(c.split())
+
+    # Strong exact token match.  This prevents a loosely related result
+    # from winning simply because it contains one common word.
+    if q_words and q_words.issubset(c_words):
+        return 98
+
     if q in c:
         return 95
 
@@ -630,20 +640,21 @@ def title_score(
 
     if fuzz:
 
-        token_score = fuzz.token_set_ratio(
-            q,
-            c
+        token_score = fuzz.token_set_ratio(q, c)
+        ratio_score = fuzz.ratio(q, c)
+
+        overlap = (
+            len(q_words & c_words) / len(q_words) * 100
+            if q_words else 0
         )
 
-        ratio_score = fuzz.ratio(
-            q,
-            c
-        )
+        return max(token_score, ratio_score, overlap)
 
-        return max(
-            token_score,
-            ratio_score
-        )
+    overlap = (
+        len(q_words & c_words) / len(q_words) * 100
+        if q_words else 0
+    )
+    return overlap
 
     # Fallback if rapidfuzz isn't installed
     q_words = set(q.split())
@@ -728,10 +739,14 @@ def parse_search_results(
         if len(text) < 3:
             continue
 
-        score = title_score(
-            query,
-            text
+        # The URL slug is often more reliable than anchor text because
+        # anchor text can contain badges, episode labels or site chrome.
+        slug = normalize_title(
+            urlparse(href).path.rsplit("/", 1)[-1].replace("-", " ")
         )
+        text_score = title_score(query, text)
+        slug_score = title_score(query, slug)
+        score = max(text_score, slug_score)
 
         candidates.append(
             SearchCandidate(
@@ -823,6 +838,32 @@ async def search_anime(
 
 
 # ------------------------------------------------------------
+# Strict title matching
+# ------------------------------------------------------------
+
+def title_matches_query(
+    query: str,
+    actual_title: str,
+) -> bool:
+    """Require the returned page to actually represent the requested anime."""
+
+    expected = normalize_title(resolve_alias(query))
+    actual = normalize_title(actual_title)
+
+    if not expected or not actual:
+        return False
+
+    if expected == actual or expected in actual:
+        return True
+
+    expected_words = set(expected.split())
+    actual_words = set(actual.split())
+
+    # Every meaningful query word must occur in the page title.
+    return len(expected_words) > 0 and expected_words.issubset(actual_words)
+
+
+# ------------------------------------------------------------
 # Find best page
 # ------------------------------------------------------------
 
@@ -841,11 +882,22 @@ async def find_anime_page(
             f"No anime found for: {query}"
         )
 
-    # Minimum reasonable score
-    good = [
-        c for c in candidates
-        if c.score >= 50
-    ]
+    # Minimum reasonable score.  For multi-word queries, require every
+    # query word to be present in the candidate title OR URL slug.
+        expected = normalize_title(resolve_alias(query))
+    expected_words = set(expected.split())
+
+    good = []
+    for candidate in candidates:
+        slug = normalize_title(
+            urlparse(candidate.url).path.rsplit("/", 1)[-1].replace("-", " ")
+        )
+        hay_words = set(normalize_title(candidate.title).split()) | set(slug.split())
+        if candidate.score < 50:
+            continue
+        if expected_words and not expected_words.issubset(hay_words):
+            continue
+        good.append(candidate)
 
     if not good:
         raise AnimeNotFound(
@@ -935,49 +987,83 @@ def find_labeled_value(
 
 def extract_poster(
     soup: BeautifulSoup,
+    title_hint: str = "",
 ) -> Optional[str]:
+    """Extract the poster belonging to this page.
 
-    # Prefer main/article images
+    Some pages on the source site have an incorrect global ``og:image``
+    (for example a poster from a recommended post).  Therefore the actual
+    article images are checked first and the social preview is only a
+    fallback.
+    """
+
+    title_norm = normalize_title(title_hint)
+    title_tokens = [t for t in title_norm.split() if len(t) >= 3]
     candidates = []
 
-    for img in soup.find_all("img"):
+    content = soup.select_one(
+        "article, .entry-content, .post-content, .td-post-content, main"
+    )
+    images = content.find_all("img") if content else soup.find_all("img")
 
+    for position, img in enumerate(images):
         src = (
             img.get("data-src")
             or img.get("data-lazy-src")
+            or img.get("data-original")
             or img.get("src")
         )
-
-        if not src:
+        if not src or src.startswith("data:"):
             continue
 
-        src = urljoin(
-            BASE_URL,
-            src
+        src = urljoin(BASE_URL, src)
+        hay = normalize_title(" ".join([
+            img.get("alt", ""),
+            img.get("title", ""),
+            img.get("data-caption", ""),
+            src,
+        ]))
+
+        if any(x in hay for x in (
+            "logo", "avatar", "icon", "telegram", "facebook",
+            "recommended", "invincible"
+        )) and "invincible" not in title_norm:
+            score = -20
+        else:
+            score = 0
+
+        score += sum(4 for token in title_tokens if token in hay)
+
+        # The first large image in the article is normally the actual poster.
+        if position == 0:
+            score += 3
+
+        try:
+            width = int(img.get("width") or 0)
+            height = int(img.get("height") or 0)
+            if width >= 250 and height >= 250:
+                score += 3
+        except Exception:
+            pass
+
+        candidates.append((score, src))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_src = candidates[0]
+        if best_score >= 0:
+            return best_src
+
+    # Only use social preview after article images have been checked.
+    for prop in ("og:image", "twitter:image", "twitter:image:src"):
+        meta = (
+            soup.find("meta", attrs={"property": prop})
+            or soup.find("meta", attrs={"name": prop})
         )
+        if meta and meta.get("content"):
+            return urljoin(BASE_URL, meta.get("content"))
 
-        alt = clean_text(
-            img.get("alt")
-        ).lower()
-
-        candidates.append(
-            (
-                src,
-                alt
-            )
-        )
-
-    # Try image whose alt/title contains anime
-    for src, alt in candidates:
-
-        if (
-            "season" in alt
-            or "anime" in alt
-            or "episode" in alt
-        ):
-            return src
-
-    return candidates[0][0] if candidates else None
+    return None
 
 
 # ------------------------------------------------------------
@@ -1013,47 +1099,68 @@ def extract_page_title(
 # Extract info section
 # ------------------------------------------------------------
 
+def extract_content_text(
+    soup: BeautifulSoup,
+) -> str:
+    """Return the article/post content, excluding nav/footer/recommendations."""
+
+    # Prefer the actual post/article container used by WordPress-like pages.
+    selectors = [
+        "article",
+        ".entry-content",
+        ".post-content",
+        ".td-post-content",
+        ".single-post-content",
+        ".content-area",
+        "main",
+    ]
+
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if node:
+            clone = BeautifulSoup(str(node), "html.parser")
+            for bad in clone.select("script,style,nav,footer,header,aside,.comments,.comment-respond,.related-posts,.sidebar,.widget"):
+                bad.decompose()
+            text = clean_text(clone.get_text(" ", strip=True))
+            if len(text) >= 120:
+                return text
+
+    # Last resort: strip common page chrome from the whole document.
+    clone = BeautifulSoup(str(soup), "html.parser")
+    for bad in clone.select("script,style,nav,footer,header,aside,.comments,.comment-respond,.related-posts,.sidebar,.widget"):
+        bad.decompose()
+    return clean_text(clone.get_text(" ", strip=True))
+
+
+# ------------------------------------------------------------
+# Extract info section
+# ------------------------------------------------------------
+
 def extract_info_text(
     soup: BeautifulSoup,
 ) -> str:
 
-    # Find "Anime Series Info"
+    # Find the nearest container around the actual Anime Series/Movie Info heading.
     marker = soup.find(
         string=re.compile(
-            r"Anime\s+Series\s+Info",
+            r"Anime\s+(?:Series|Movie)\s+Info",
             re.I
         )
     )
 
     if marker:
-
         parent = marker.parent
-
-        # Try nearby container
-        for _ in range(4):
-
+        for _ in range(5):
             if not parent:
                 break
-
-            text = clean_text(
-                parent.get_text(
-                    " ",
-                    strip=True
-                )
-            )
-
-            if len(text) > 150:
+            text = clean_text(parent.get_text(" ", strip=True))
+            # Stop at a reasonably sized info block.  Do not fall back to the
+            # entire article because that also contains download/footer text.
+            if 80 <= len(text) <= 1800:
                 return text
-
             parent = parent.parent
 
-    # Fallback: complete page text
-    return clean_text(
-        soup.get_text(
-            " ",
-            strip=True
-        )
-    )
+    return extract_content_text(soup)
 
 
 # ------------------------------------------------------------
@@ -1242,16 +1349,9 @@ def parse_page_info(
         "html.parser"
     )
 
-    page_text = clean_text(
-        soup.get_text(
-            " ",
-            strip=True
-        )
-    )
+    page_text = extract_content_text(soup)
 
-    info_text = extract_info_text(
-        soup
-    )
+    info_text = extract_info_text(soup)
 
     title = find_labeled_value(
         info_text,
@@ -1296,7 +1396,7 @@ def parse_page_info(
     synopsis = find_labeled_value(
         info_text,
         "Synopsis"
-        )
+    )
 
     anime = AnimeInfo(
 
@@ -1307,7 +1407,8 @@ def parse_page_info(
         aliases=[],
 
         poster_url=extract_poster(
-            soup
+            soup,
+            title,
         ),
 
         source_url=source_url,
@@ -1336,6 +1437,11 @@ def parse_page_info(
 
         dub_by=parse_dub_by(
             page_text
+        ),
+        media_type=(
+            "movie"
+            if re.search(r"\bmovie\b", (title or "") + " " + source_url, re.I)
+            else "anime"
         ),
     )
 
@@ -1373,19 +1479,14 @@ def parse_page_info(
                 match.group(0)
             )
 
-    # Hindi availability
+    # Hindi availability must come from the actual post, not the site's
+    # language menu/footer (which otherwise causes false positives).
     page_lower = page_text.lower()
-
-    anime.hindi_available = (
-        "hindi dub" in page_lower
-        or "hindi dubbed" in page_lower
-        or re.search(
-            r"\bhindi\s+(?:dub|sub)\b",
-            page_lower
-        )
-        is not None
-        or "language: hindi" in page_lower
-    )
+    anime.hindi_available = bool(re.search(
+        r"(?:hindi\s+(?:dub(?:bed)?|audio)|(?:dual|multi)\s+audio.*hindi|language\s*:\s*[^.]{0,40}hindi)",
+        page_lower,
+        re.I,
+    ))
 
     return anime
 
@@ -1669,7 +1770,7 @@ def parse_episodes(
         # Ignore extremely large containers
         if len(text) > 1200:
             continue
-
+    
         languages = detect_episode_languages(
             text
         )
@@ -1710,12 +1811,7 @@ def parse_episodes(
     # the episode heading.
     # --------------------------------------------------------
 
-    page_text = clean_text(
-        soup.get_text(
-            " ",
-            strip=True
-        )
-    )
+    page_text = extract_content_text(soup)
 
     pattern = re.compile(
         r"(Episode\s+\d{1,4}.*?)(?=Episode\s+\d{1,4}|$)",
@@ -2117,7 +2213,7 @@ def parse_date_string(
 
 def parse_last_release(
     soup: BeautifulSoup,
-    anime: AnimeInfo,
+        anime: AnimeInfo,
 ) -> None:
 
     # Look at individual episode containers
@@ -2245,6 +2341,7 @@ async def fetch_studio_from_jikan(
 
     return None
 
+
 # ------------------------------------------------------------
 # Parse complete page
 # ------------------------------------------------------------
@@ -2259,12 +2356,7 @@ def parse_anime_page(
         "html.parser"
     )
 
-    page_text = clean_text(
-        soup.get_text(
-            " ",
-            strip=True
-        )
-    )
+    page_text = extract_content_text(soup)
 
     anime = parse_page_info(
         html,
@@ -2330,11 +2422,12 @@ FRANCHISE_SERIES = {
 
 
 def normalize_franchise_query(query: str) -> str:
+    # Only a bare Naruto query expands to the Naruto franchise.
+    # Dragon Ball names are intentionally treated as individual series:
+    # Dragon Ball -> Dragon Ball, Dragon Ball Z -> DBZ, etc.
     q = normalize_title(query)
-    if q in ("naruto", "naruto shippuden"):
+    if q == "naruto":
         return "naruto"
-    if q.startswith("dragon ball") or q.startswith("dragonball") or q in ("dbz", "dbs"):
-        return "dragon ball"
     return ""
 
 
@@ -2580,84 +2673,151 @@ class AnimeScraper:
 
         franchise_key = normalize_franchise_query(query)
 
-        # Only Naruto/Dragon Ball use multi-series aggregation.
-        # Every other anime keeps the original single-result behaviour.
-        if franchise_key:
+        # Bare Naruto = Naruto + Naruto Shippuden.
+        if franchise_key == "naruto":
             config = FRANCHISE_SERIES[franchise_key]
-
             candidates: list[SearchCandidate] = []
             seen_urls = set()
 
-            # Search each known series separately. This is more reliable than
-            # relying on one broad "dragon ball" search page.
             for series_query in config["queries"]:
                 try:
-                    found = await search_anime(
-                        self.session,
-                        series_query
-                    )
+                    found = await search_anime(self.session, series_query)
                 except Exception as exc:
-                    logger.warning(
-                        "Franchise search failed for %s: %s",
-                        series_query,
-                        exc
-                    )
+                    logger.warning("Franchise search failed for %s: %s", series_query, exc)
                     continue
-
                 for candidate in found:
                     if candidate.url in seen_urls:
                         continue
-
-                    matched_name = franchise_series_name(
-                        candidate.title,
-                        franchise_key
-                    )
+                    matched_name = franchise_series_name(candidate.title, franchise_key)
                     if not matched_name:
                         continue
-
                     seen_urls.add(candidate.url)
                     candidates.append(candidate)
 
-            # Highest confidence first; scrape a bounded number of pages.
-            candidates.sort(
-                key=lambda x: x.score,
-                reverse=True
-            )
-
-            scraped: list[AnimeInfo] = []
+            candidates.sort(key=lambda x: x.score, reverse=True)
+            scraped = []
             for candidate in candidates[:20]:
                 try:
-                    scraped.append(
-                        await self.scrape_url(candidate.url)
-                    )
+                    scraped.append(await self.scrape_url(candidate.url))
                 except Exception as exc:
-                    logger.warning(
-                        "Could not scrape franchise page %s: %s",
-                        candidate.url,
-                        exc
-                    )
+                    logger.warning("Could not scrape franchise page %s: %s", candidate.url, exc)
 
             if scraped:
-                return merge_franchise_results(
-                    config["name"],
-                    scraped
-                )
+                return merge_franchise_results(config["name"], scraped)
 
-            # Fall back to the normal single-page path if the franchise
-            # aggregation found nothing usable.
-            candidate = await find_anime_page(
-                self.session,
-                query
-            )
-            return await self.scrape_url(candidate.url)
+        # Dragon Ball is intentionally NOT a franchise search.
+        # /anime Dragon Ball -> original Dragon Ball only.
+        # /anime Dragon Ball Z -> DBZ only, with its own seasons/pages.
+        # Same for GT, Super and DAIMA.
+        normalized = normalize_title(query)
+        is_dragon_series = (
+            normalized == "dragon ball"
+            or normalized.startswith("dragon ball ")
+            or normalized in {"dragonball", "dbz", "dbs"}
+        )
 
-        candidate = await find_anime_page(
+        if is_dragon_series:
+            # Lock the search to the requested Dragon Ball series.
+            # This prevents "Dragon Ball" from returning Z/Super and vice versa.
+            expected_name = resolve_alias(query)
+            candidates = await find_season_candidates(self.session, query, limit=8)
+            filtered_candidates = []
+            for candidate in candidates:
+                matched = franchise_series_name(candidate.title, "dragon ball")
+                if matched == expected_name:
+                    filtered_candidates.append(candidate)
+
+            # If the search engine did not expose a season in the title, keep
+            # the best exact-looking result rather than mixing another series.
+            if not filtered_candidates and candidates:
+                filtered_candidates = [candidates[0]]
+
+            scraped = []
+            seen_seasons = set()
+            seen_urls = set()
+            for candidate in filtered_candidates:
+                if candidate.url in seen_urls:
+                    continue
+                try:
+                    page = await self.scrape_url(candidate.url)
+                except Exception as exc:
+                    logger.warning("Could not scrape series page %s: %s", candidate.url, exc)
+                    continue
+                if page.source_url in seen_urls:
+                    continue
+                if page.season is not None and page.season in seen_seasons:
+                    continue
+                seen_urls.add(page.source_url or candidate.url)
+                if page.season is not None:
+                    seen_seasons.add(page.season)
+                scraped.append(page)
+
+            if scraped:
+                scraped.sort(key=lambda x: (x.season if x.season is not None else 999, x.source_url or ""))
+                base = scraped[0]
+                base.series = scraped
+                base.title = base.canonical_title or base.title
+                base.is_franchise = False
+                return base
+
+        # Generic anime/movie lookup: scrape several top matches and verify
+        # the real page title before accepting one.  This is the important
+        # safeguard that makes the resolver work for *all* anime, not just
+        # hard-coded names.
+        candidates = await search_anime(
             self.session,
             query
         )
 
-        return await self.scrape_url(
-            candidate.url
+        if not candidates:
+            raise AnimeNotFound(f"No anime found for: {query}")
+
+        expected = normalize_title(resolve_alias(query))
+        expected_words = set(expected.split())
+        checked = 0
+
+        for candidate in candidates:
+            if candidate.score < 50:
+                continue
+
+            slug = normalize_title(
+                urlparse(candidate.url).path.rsplit("/", 1)[-1].replace("-", " ")
+            )
+            hay_words = set(normalize_title(candidate.title).split()) | set(slug.split())
+
+            if expected_words and not expected_words.issubset(hay_words):
+                continue
+
+            try:
+                page = await self.scrape_url(candidate.url)
+            except Exception as exc:
+                logger.warning("Could not scrape candidate %s: %s", candidate.url, exc)
+                continue
+
+            checked += 1
+            actual_title = page.canonical_title or page.title
+
+            if title_matches_query(query, actual_title):
+                logger.info(
+                    "VERIFIED MATCH: %s -> %s | %s",
+                    query,
+                    actual_title,
+                    candidate.url,
+                )
+                return page
+
+            logger.warning(
+                "Rejected mismatched page: query=%r page=%r url=%s",
+                query,
+                actual_title,
+                candidate.url,
+            )
+
+            if checked >= 8:
+                break
+
+        raise AnimeNotFound(
+            f"Anime not confidently matched: {query}"
         )
 
 # ============================================================
@@ -2759,152 +2919,64 @@ def format_series_block(
     series: AnimeInfo,
     index: int,
 ) -> list[str]:
-    lines = [
-        f"{index}. {series.canonical_title or series.title}"
-    ]
-
-    # If RareAnimes returned multiple pages/seasons for this series,
-    # print each season separately.
+    lines = [f"{index}. {series.canonical_title or series.title}"]
     pages = series.series if series.series else [series]
-
-    season_lines = []
     for page in pages:
-        season_label = (
-            f"Season {page.season}"
-            if page.season is not None
-            else "Latest"
-        )
-        season_lines.append(
-            f"• {season_label} — {format_episode_count(page)} Episodes"
-        )
-
-    lines.extend(season_lines or [
-        f"• Latest — {format_episode_count(series)} Episodes"
-    ])
+        season_label = f"Season {page.season}" if page.season is not None else "Latest"
+        lines.append(f"• {season_label} — {format_episode_count(page)} Episodes")
     return lines
 
 
 def format_anime_info(
     anime: AnimeInfo,
 ) -> str:
-    # --------------------------------------------------------
-    # Franchise output
-    # --------------------------------------------------------
-    if anime.is_franchise and anime.series:
-        lines = [
-            f"🎬 Anime: {anime.canonical_title or anime.title}",
-            "",
-            "🇮🇳 Hindi Available Series:",
-            "",
-        ]
-
-        for index, series in enumerate(anime.series, 1):
-            lines.extend(
-                format_series_block(series, index)
-            )
-            lines.append("")
-
-        if anime.movies:
-            lines.extend([
-                "🎬 Movies",
-                *[f"• {movie}" for movie in anime.movies],
-                "",
-            ])
-
-        lines.extend([
+    # Movie = only the fields the user requested.
+    if getattr(anime, "media_type", "anime") == "movie":
+        hindi = "✅ Available" if anime.hindi_available else "❌ Not Available"
+        return "\n".join([
+            f"🎬 Movie: {anime.canonical_title or anime.title}",
             f"📺 Platform: {format_platform(anime)}",
-            "",
-            f"🇮🇳 Hindi Dub: "
-            f"{'✅ Available' if anime.hindi_available else '❌ Not Available'}",
-            "",
-            f"🌐 Languages: {format_languages(anime)}",
-            "",
-            f"📊 Status: {format_status(anime.status)}",
-            "",
-            f"🔎 Source: {anime.source}",
+            f"🇮🇳 Hindi Dub: {hindi}",
         ])
+
+    # Naruto franchise only.
+    if anime.is_franchise and anime.series:
+        lines = [f"🎌 Anime: {anime.canonical_title or anime.title}", "", "📺 Series:", ""]
+        for index, series in enumerate(anime.series, 1):
+            lines.extend(format_series_block(series, index))
+            lines.append("")
         return "\n".join(lines).strip()
 
-    # --------------------------------------------------------
-    # Normal single-anime output
-    # --------------------------------------------------------
-    lines = []
+    # Individual anime / individual Dragon Ball series.
+    lines = [
+        f"🎬 Anime: {anime.canonical_title or anime.title}",
+        f"🇮🇳 Hindi Dub: {'✅ Available' if anime.hindi_available else '❌ Not Available'}",
+        f"📺 Platform: {format_platform(anime)}",
+    ]
 
-    lines.append(
-        f"🎬 Anime: {anime.canonical_title or anime.title}"
-    )
+    if anime.series and len(anime.series) > 1:
+        lines.append("")
+        lines.append("📺 Seasons:")
+        for index, page in enumerate(anime.series, 1):
+            season_label = f"Season {page.season}" if page.season is not None else f"Part {index}"
+            lines.append(f"• {season_label} — {format_episode_count(page)} Episodes")
+    else:
+        if anime.season is not None:
+            lines.append(f"📀 Season: {anime.season}")
+        lines.append(f"🎬 Episodes: {format_episode_count(anime)}")
 
-    hindi = (
-        "✅ Available"
-        if anime.hindi_available
-        else "❌ Not Available"
-    )
-
-    lines.append(
-        f"🇮🇳 Hindi Dub: {hindi}"
-    )
-
-    lines.append(
-        f"📺 Platform: {format_platform(anime)}"
-    )
-
-    if anime.season is not None:
-        lines.append(
-            f"📀 Season: {anime.season}"
-        )
-
-    lines.append(
-        f"🎬 Episodes: {format_episode_count(anime)}"
-    )
-
-    lines.append("")
-    lines.append(
-        f"🌐 Languages: {format_languages(anime)}"
-    )
-
-    lines.append("")
-    lines.append(
-        f"📊 Status: {format_status(anime.status)}"
-    )
+    lines.append(f"🌐 Languages: {format_languages(anime)}")
+    lines.append(f"📊 Status: {format_status(anime.status)}")
 
     if anime.last_episode is not None:
-        lines.append("")
-        lines.append(
-            f"📅 Last Episode: Episode {anime.last_episode}"
-        )
-
+        lines.append(f"📅 Last Episode: Episode {anime.last_episode}")
     if anime.status == "ongoing":
         if anime.next_episode is not None:
-            lines.append(
-                f"⏭ Next Episode: Episode {anime.next_episode}"
-            )
+            lines.append(f"⏭ Next Episode: Episode {anime.next_episode}")
         if anime.expected_release:
-            lines.append(
-                f"📅 Expected Release: {anime.expected_release}"
-            )
+            lines.append(f"📅 Expected Release: {anime.expected_release}")
         if anime.schedule:
-            lines.append(
-                f"⏰ Schedule: {anime.schedule}"
-            )
-
-    if anime.studio:
-        lines.append("")
-        lines.append(
-            f"🏢 Studio: {anime.studio}"
-        )
-
-    if anime.dub_by:
-        lines.append(
-            f"🎙 Dub By: {anime.dub_by}"
-        )
-
-    # Poster is deliberately kept in the data model, not printed as raw URL.
-    # The Telegram/Discord handler should send anime.poster_url as the
-    # message/embed image.
-    lines.append("")
-    lines.append(
-        f"🔎 Source: {anime.source}"
-    )
+            lines.append(f"⏰ Schedule: {anime.schedule}")
 
     return "\n".join(lines)
 
@@ -3025,4 +3097,5 @@ async def get_anime_info(query: str) -> AnimeInfo:
 
     async with AnimeScraper(source="DC") as scraper:
         return await scraper.scrape(query)
+        
     
