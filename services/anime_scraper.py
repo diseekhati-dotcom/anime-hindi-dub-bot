@@ -398,9 +398,10 @@ def cache_file(url: str) -> Path:
     key = normalize_slug(url)
 
     if not key:
-    key = "home"
+        key = "home"
 
     return CACHE_DIR / f"{key[:180]}.json"
+
 
 
 # ------------------------------------------------------------
@@ -802,6 +803,9 @@ async def _scrape_candidates(
     return [x for x in results if x is not None]
 
 
+
+    
+
 def merge_anime_results(
     results: list[AnimeInfo],
     query: str,
@@ -1185,6 +1189,7 @@ def parse_platforms(
     return unique(platforms)
 
 
+
 # ------------------------------------------------------------
 # Extract dub provider
 # ------------------------------------------------------------
@@ -1198,7 +1203,7 @@ def parse_dub_by(
         r"dubbed\s+by\s+([A-Za-z0-9 .&+'-]+)",
 
         r"dub\s+by\s+([A-Za-z0-9 .&+'-]+)",
-        
+
         r"hindi\s+dub\s+by\s+([A-Za-z0-9 .&+'-]+)",
     ]
 
@@ -1598,7 +1603,7 @@ def get_episode_blocks(
     result = []
 
     seen = set()
-    
+
     for block in blocks:
 
         key = re.sub(
@@ -1617,6 +1622,7 @@ def get_episode_blocks(
         )
 
     return result
+
 
 
 # ------------------------------------------------------------
@@ -1997,11 +2003,12 @@ def detect_ongoing(
         if re.search(
             pattern,
             page_text,
-                        re.I
+            re.I
         ):
             return True
 
     return False
+
 
 
 # ------------------------------------------------------------
@@ -2396,7 +2403,7 @@ class AnimeScraper:
     # --------------------------------------------------------
 
     async def scrape(
-                self,
+        self,
         query: str,
     ) -> AnimeInfo:
 
@@ -2442,7 +2449,8 @@ class AnimeScraper:
         return merge_anime_results(
             results,
             query,
-        )
+    )
+
 
 # ============================================================
 # PART 7/7
