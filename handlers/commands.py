@@ -286,132 +286,59 @@ async def send_anime_with_poster(
     update: Update,
     anime_info: Any,
 ) -> None:
-    """
-    Send anime information.
-
-    Supports:
-        - AnimeInfo dataclass
-        - Dictionary (backward compatibility)
-    """
-
+    """Send poster + anime information in the same Telegram message."""
     if not update.message:
         return
 
     try:
-        # ----------------------------------------------------
-        # AnimeInfo object
-        # ----------------------------------------------------
-
         if isinstance(anime_info, AnimeInfo):
             poster_url = anime_info.poster_url
-
-            # Use scraper's official formatter.
             caption = format_anime_info(anime_info)
-
-        # ----------------------------------------------------
-        # Dictionary fallback
-        # ----------------------------------------------------
-
         elif isinstance(anime_info, dict):
-            poster_url = (
-                anime_info.get("poster")
-                or anime_info.get("poster_url")
-            )
-
-            caption = _format_dict_anime_info(
-                anime_info
-            )
-
-        # ----------------------------------------------------
-        # Unknown object
-        # ----------------------------------------------------
-
+            poster_url = anime_info.get("poster") or anime_info.get("poster_url")
+            caption = _format_dict_anime_info(anime_info)
         else:
-            logger.error(
-                "Unsupported anime info type: "
-                f"{type(anime_info)}"
-            )
-
-            await update.message.reply_text(
-                "❌ Invalid anime information received."
-            )
+            await update.message.reply_text("❌ Invalid anime information received.")
             return
-
-        # ----------------------------------------------------
-        # Try poster first
-        # ----------------------------------------------------
-
-        if poster_url and _is_valid_url(poster_url):
-            try:
-                # Send poster separately; information is sent below.
-                await update.message.reply_photo(
-                    photo=poster_url
-                )
-
-                logger.debug(
-                    "Anime poster sent successfully."
-                )
-
-            except Exception as exc:
-                logger.warning(
-                    f"Poster sending failed: {exc}"
-                )
-
-        # ----------------------------------------------------
-        # Send full anime information
-        # Always send it separately from the poster.
-        # Split long results to stay within Telegram's limit.
-        # ----------------------------------------------------
 
         if not caption or not caption.strip():
-            logger.error(
-                "Anime information formatter returned empty text."
-            )
-            await update.message.reply_text(
-                "❌ Anime information empty aa rahi hai. "
-                "Scraper formatter ko check karna hoga."
-            )
+            await update.message.reply_text("❌ Anime information empty aa rahi hai.")
             return
 
+        # Telegram photo caption limit is 1024 characters.
+        if poster_url and _is_valid_url(poster_url):
+            try:
+                if len(caption) <= 1024:
+                    await update.message.reply_photo(photo=poster_url, caption=caption)
+                    return
+
+                split_at = caption.rfind("\n", 0, 1000)
+                if split_at <= 0:
+                    split_at = 1000
+                await update.message.reply_photo(
+                    photo=poster_url,
+                    caption=caption[:split_at],
+                )
+                caption = caption[split_at:].lstrip()
+            except Exception as exc:
+                logger.warning(f"Poster + caption failed: {exc}")
+
+        # If there is no valid poster, or caption continued after the photo,
+        # send the remaining text normally.
         while caption:
             if len(caption) <= 4000:
-                await update.message.reply_text(
-                    caption,
-                    disable_web_page_preview=True
-                )
+                await update.message.reply_text(caption, disable_web_page_preview=True)
                 break
-
-            split_at = caption.rfind(
-                "\n",
-                0,
-                4000
-            )
-
+            split_at = caption.rfind("\n", 0, 4000)
             if split_at <= 0:
                 split_at = 4000
-
-            await update.message.reply_text(
-                caption[:split_at],
-                disable_web_page_preview=True
-            )
-
-            caption = caption[
-                split_at:
-            ].lstrip()
-
-        logger.debug(
-            "Anime information sent successfully."
-        )
+            await update.message.reply_text(caption[:split_at], disable_web_page_preview=True)
+            caption = caption[split_at:].lstrip()
 
     except Exception as exc:
-        logger.exception(
-            f"Error sending anime information: {exc}"
-        )
-
+        logger.exception(f"Error sending anime information: {exc}")
         try:
-            await update.message.reply_text(
-                "❌ Error sending anime information."
-            )
+            await update.message.reply_text("❌ Error sending anime information.")
         except Exception:
             pass
 
@@ -622,6 +549,9 @@ def _safe_text(
     value = str(value).strip()
 
     return value if value else default
+
+
+
 
 
 
