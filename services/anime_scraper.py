@@ -666,7 +666,7 @@ def franchise_key(query: str) -> Optional[str]:
 
 def is_exact_series_query(query: str) -> bool:
     norm = normalize_title(query)
-        for names in FRANCHISE_FAMILIES.values():
+    for names in FRANCHISE_FAMILIES.values():
         if any(norm == normalize_title(name) for name in names):
             return True
     return False
@@ -693,37 +693,54 @@ def series_from_anime(anime: AnimeInfo, fallback: str) -> SeriesInfo:
 
 
 def merge_series_seasons(pages: list[AnimeInfo], title: str) -> SeriesInfo:
-    pages = sorted(pages, key=lambda x: (x.season is None, x.season or 999, x.source_url or ""))
+    pages = sorted(
+        pages,
+        key=lambda x: (
+            x.season is None,
+            x.season or 999,
+            x.source_url or "",
+        ),
+    )
+
     first = pages[0]
     seasons = []
     total = 0
     hindi_total = 0
     platforms, languages = [], []
     status = "completed"
+
     for anime in pages:
-        seasons.append(SeasonInfo(
-            season=anime.season,
-            title=anime.canonical_title or anime.title,
-            url=anime.source_url or "",
-            episodes=anime.total_episodes,
-            hindi_available=anime.hindi_available,
-            hindi_episodes=anime.available_episodes.get("Hindi"),
-            platform=anime.platform,
-            languages=anime.languages,
-            status=anime.status,
-        ))
+        seasons.append(
+            SeasonInfo(
+                season=anime.season,
+                title=anime.canonical_title or anime.title,
+                url=anime.source_url or "",
+                episodes=anime.total_episodes,
+                hindi_available=anime.hindi_available,
+                hindi_episodes=anime.available_episodes.get("Hindi"),
+                platform=anime.platform,
+                languages=anime.languages,
+                status=anime.status,
+            )
+        )
+
         if anime.total_episodes:
             total += anime.total_episodes
+
         if anime.available_episodes.get("Hindi"):
             hindi_total += anime.available_episodes["Hindi"]
+
         platforms.extend(anime.platform)
         languages.extend(anime.languages)
+
         if anime.status == "ongoing":
             status = "ongoing"
         elif anime.status != "completed":
             status = "unknown" if status == "completed" else status
+
     if not seasons:
         status = "unknown"
+
     return SeriesInfo(
         title=title,
         url=first.source_url or "",
