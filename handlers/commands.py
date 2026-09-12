@@ -116,6 +116,8 @@ async def help_command(
         "📝 Examples:\n"
         "/anime Naruto\n"
         "/anime Naruto Shippuden\n"
+        "/anime Dragon Ball\n"
+        "/anime Bleach\n"
         "/anime Solo Leveling\n"
         "/anime Re Zero\n"
         "/anime Attack on Titan\n"
@@ -126,8 +128,8 @@ async def help_command(
         "🎬 Anime Name\n"
         "🇮🇳 Hindi Dub\n"
         "📺 Platform\n"
-        "📀 Season\n"
-        "🎬 Episodes\n"
+        "📀 Season / Series\n"
+        "🎬 Episodes (all matched seasons)\n"
         "🌐 Languages\n"
         "📊 Status\n"
         "📅 Last/Release information\n"
@@ -140,7 +142,8 @@ async def help_command(
         "• Short/common anime name bhi try kar sakte ho.\n"
         "• Example: /anime Re Zero\n"
         "• Movie search ke liye naam ke saath Movie likho.\n"
-        "• Spelling sahi rakhne par result better milega.\n\n"
+        "• Spelling sahi rakhne par result better milega.\n"
+        "• Naruto / Dragon Ball / Bleach jaise multi-season anime ke matched seasons ek result me aa sakte hain.\n\n"
 
         "🔎 Data source: DC"
     )
@@ -202,7 +205,8 @@ async def anime_command(
     # --------------------------------------------------------
 
     loading_message = await update.message.reply_text(
-        f"🔍 Searching for: {anime_name}"
+        f"🔍 Searching for: {anime_name}\n"
+        "⏳ Multiple seasons/series check ho rahi hain..." 
     )
 
     try:
@@ -618,5 +622,6 @@ def _safe_text(
     value = str(value).strip()
 
     return value if value else default
+
 
 
