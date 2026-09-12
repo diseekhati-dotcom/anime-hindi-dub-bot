@@ -2454,61 +2454,60 @@ class AnimeScraper:
 # Search and scrape
 # --------------------------------------------------------
 
-async def scrape(
-    self,
-    query: str,
-) -> AnimeInfo:
-    if not self.session:
-        raise RuntimeError(
-            "Use AnimeScraper with async context"
-        )
-
-    clean_query = query.strip()
-    key = normalized_franchise_key(clean_query)
-
-    # Only configured franchises are merged.
-    if key in FRANCHISE_GROUPS:
-        requested_titles = FRANCHISE_GROUPS[key]
-        items = []
-        seen_urls = set()
-
-        for title in requested_titles:
-            try:
-                candidate = await find_anime_page(
-                    self.session, title
-                )
-
-                if candidate.url in seen_urls:
-                    continue
-
-                seen_urls.add(candidate.url)
-                items.append(
-                    await self.scrape_url(candidate.url)
-                )
-
-            except AnimeNotFound:
-                logger.warning(
-                    "Franchise part not found: %s", title
-                )
-
-        if not items:
-            raise AnimeNotFound(
-                f"No pages found for franchise: {clean_query}"
+    async def scrape(
+        self,
+        query: str,
+    ) -> AnimeInfo:
+        if not self.session:
+            raise RuntimeError(
+                "Use AnimeScraper with async context"
             )
 
-        return merge_anime_pages(
-            items,
-            requested_titles[0],
+        clean_query = query.strip()
+        key = normalized_franchise_key(clean_query)
+
+        # Only configured franchises are merged.
+        if key in FRANCHISE_GROUPS:
+            requested_titles = FRANCHISE_GROUPS[key]
+            items = []
+            seen_urls = set()
+
+            for title in requested_titles:
+                try:
+                    candidate = await find_anime_page(
+                        self.session, title
+                    )
+
+                    if candidate.url in seen_urls:
+                        continue
+
+                    seen_urls.add(candidate.url)
+                    items.append(
+                        await self.scrape_url(candidate.url)
+                    )
+
+                except AnimeNotFound:
+                    logger.warning(
+                        "Franchise part not found: %s", title
+                    )
+
+            if not items:
+                raise AnimeNotFound(
+                    f"No pages found for franchise: {clean_query}"
+                )
+
+            return merge_anime_pages(
+                items,
+                requested_titles[0],
+            )
+
+        # Every other title is kept as its own series/movie.
+        candidate = await find_anime_page(
+            self.session,
+            clean_query,
         )
 
-    # Every other title is kept as its own series/movie.
-    candidate = await find_anime_page(
-        self.session,
-        clean_query,
-    )
-
-    return await self.scrape_url(candidate.url)
-
+        return await self.scrape_url(candidate.url)
 # ============================================================
 # PART 7/7
 # OUTPUT FORMATTER + TEST
