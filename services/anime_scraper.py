@@ -2162,7 +2162,7 @@ def parse_last_release(
 # Try Jikan for studio metadata
 # ------------------------------------------------------------
 
-    async def fetch_studio_from_jikan(
+async def fetch_studio_from_jikan(
     session: aiohttp.ClientSession,
     title: str,
 ) -> Optional[str]:
@@ -2244,7 +2244,6 @@ def parse_last_release(
         )
 
     return None
-
 
 # ------------------------------------------------------------
 # Parse complete page
