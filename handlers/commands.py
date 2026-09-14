@@ -295,7 +295,7 @@ async def send_anime_with_poster(
             # anime_scraper.py now returns franchise-aware AnimeInfo for
             # Naruto / Dragon Ball and normal AnimeInfo for other anime.
             # format_anime_info() handles both formats.
-            poster_url = anime_info.poster_url
+            poster_url = anime_info.poster
             caption = get_scraper().format_result(anime_info)
         elif isinstance(anime_info, dict):
             poster_url = anime_info.get("poster") or anime_info.get("poster_url")
