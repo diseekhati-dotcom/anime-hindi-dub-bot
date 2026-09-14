@@ -1,560 +1,281 @@
 """
-Telegram command handlers for Anime Hindi Info Bot.
+commands.py
+Telegram commands for Anime Hindi Info Bot
 
-Commands:
-    /start
-    /help
-    /anime <anime name>
-
-Compatible with services.anime_scraper.AnimeInfo
+Requires:
+    python-telegram-bot==22.7
 """
 
+from __future__ import annotations
+
 import html
-from typing import Any
+import logging
 
 from telegram import Update
-from telegram.ext import ContextTypes
+from telegram.constants import ChatType
+from telegram.ext import CommandHandler, ContextTypes
 
-from services.anime_scraper import (
-    AnimeInfo,
-    get_anime_info,
-    get_scraper,
-)
-
-from utils.logger import logger
+from anime_scraper import fetch_anime_text, fetch_today_releases
 
 
-# ============================================================
-# START COMMAND
-# ============================================================
+logger = logging.getLogger(__name__)
+
 
 async def start_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Handle /start command."""
-
+):
     if not update.message:
         return
 
-    user = update.effective_user
-    user_id = user.id if user else "unknown"
-
-    logger.info(
-        f"Start command received from user {user_id}"
+    text = (
+        "👋 <b>Welcome to Anime Hindi Info Bot!</b>\n\n"
+        "🎬 Anime info check karo:\n"
+        "<code>/anime Naruto</code>\n\n"
+        "📅 Aaj ke releases:\n"
+        "<code>/today</code>\n\n"
+        "📢 Daily updates ON:\n"
+        "<code>/subscribe</code>\n\n"
+        "❌ Daily updates OFF:\n"
+        "<code>/unsubscribe</code>\n\n"
+        "❓ Commands:\n"
+        "<code>/help</code>"
     )
 
-    message = (
-        "🎬 Welcome to Anime Hindi Dub Bot!\n\n"
-        "Hindi-dubbed anime ki information check karein "
-        "aur anime ka poster/details paayein.\n\n"
+    await update.message.reply_text(text, parse_mode="HTML")
 
-        "🎯 Use:\n"
-        "/anime Naruto\n"
-        "/anime Solo Leveling\n"
-        "/anime Re Zero\n\n"
-
-        "ℹ️ Commands:\n"
-        "/start - Welcome message\n"
-        "/help - Help aur examples\n"
-        "/anime <name> - Anime search\n\n"
-
-        "💬 Works in:\n"
-        "✅ Private chats\n"
-        "✅ Telegram groups\n\n"
-
-        "✨ Information:\n"
-        "✅ Anime poster\n"
-        "✅ Hindi Dub status\n"
-        "✅ Platform\n"
-        "✅ Season\n"
-        "✅ Episodes\n"
-        "✅ Languages\n"
-        "✅ Status\n"
-        "✅ Release information\n"
-        "✅ Studio\n"
-        "✅ Dub By\n\n"
-
-        "🔎 Source: DC"
-    )
-
-    await update.message.reply_text(message)
-
-
-# ============================================================
-# HELP COMMAND
-# ============================================================
 
 async def help_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Handle /help command."""
-
+):
     if not update.message:
         return
 
-    user = update.effective_user
-    user_id = user.id if user else "unknown"
-
-    logger.info(
-        f"Help command received from user {user_id}"
+    text = (
+        "🤖 <b>Anime Hindi Info Bot</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "🎬 <b>Anime Information</b>\n"
+        "<code>/anime Naruto</code>\n"
+        "<code>/anime One Piece</code>\n\n"
+        "📅 <b>Today's Releases</b>\n"
+        "<code>/today</code>\n\n"
+        "📢 <b>Daily Updates</b>\n"
+        "<code>/subscribe</code>\n"
+        "<code>/unsubscribe</code>\n\n"
+        "ℹ️ <b>Bot</b>\n"
+        "<code>/start</code>\n"
+        "<code>/help</code>"
     )
 
-    message = (
-        "ℹ️ Anime Hindi Dub Bot - Help\n\n"
+    await update.message.reply_text(text, parse_mode="HTML")
 
-        "1️⃣ /start\n"
-        "Bot ka welcome message dikhata hai.\n\n"
-
-        "2️⃣ /help\n"
-        "Ye help message dikhata hai.\n\n"
-
-        "3️⃣ /anime <anime_name>\n"
-        "Anime search karke available information dikhata hai.\n\n"
-
-        "📝 Examples:\n"
-        "/anime Naruto\n"
-        "/anime Naruto Shippuden\n"
-        "/anime Dragon Ball\n"
-        "/anime Bleach\n"
-        "/anime Solo Leveling\n"
-        "/anime Re Zero\n"
-        "/anime Attack on Titan\n"
-        "/anime Spy x Family\n"
-        "/anime Naruto Movie\n\n"
-
-        "📊 Search Result me:\n"
-        "🎬 Anime Name\n"
-        "🇮🇳 Hindi Dub\n"
-        "📺 Platform\n"
-        "📀 Season / Series\n"
-        "🎬 Episodes (all matched seasons)\n"
-        "🌐 Languages\n"
-        "📊 Status\n"
-        "📅 Last/Release information\n"
-        "⏭ Next Episode (agar available ho)\n"
-        "🏢 Studio\n"
-        "🎙 Dub By\n"
-        "🔎 Source\n\n"
-
-        "💡 Tips:\n"
-        "• Short/common anime name bhi try kar sakte ho.\n"
-        "• Example: /anime Re Zero\n"
-        "• Movie search ke liye naam ke saath Movie likho.\n"
-        "• Spelling sahi rakhne par result better milega.\n"
-        "• Naruto / Dragon Ball / Bleach jaise multi-season anime ke matched seasons ek result me aa sakte hain.\n\n"
-
-        "🔎 Data source: DC"
-    )
-
-    await update.message.reply_text(message)
-
-
-# ============================================================
-# ANIME COMMAND
-# ============================================================
 
 async def anime_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Handle /anime <anime name> command."""
-
+):
     if not update.message:
         return
 
-    user = update.effective_user
-    user_id = user.id if user else "unknown"
-
-    chat = update.effective_chat
-    chat_type = chat.type if chat else "unknown"
-
-    logger.info(
-        f"Anime command received from user {user_id} "
-        f"in {chat_type} chat"
-    )
-
-    # --------------------------------------------------------
-    # Check anime name
-    # --------------------------------------------------------
-
     if not context.args:
         await update.message.reply_text(
-            "❌ Usage:\n"
-            "/anime <anime name>\n\n"
-            "Examples:\n"
-            "/anime Naruto\n"
-            "/anime Solo Leveling\n"
-            "/anime Re Zero"
+            "❌ Anime name missing.\n\n"
+            "Example:\n"
+            "<code>/anime Naruto</code>\n"
+            "<code>/anime One Piece</code>",
+            parse_mode="HTML",
         )
         return
 
     anime_name = " ".join(context.args).strip()
 
-    if not anime_name:
-        await update.message.reply_text(
-            "❌ Please provide an anime name.\n\n"
-            "Example:\n"
-            "/anime Naruto"
-        )
-        return
-
-    # --------------------------------------------------------
-    # Loading message
-    # --------------------------------------------------------
-
-    loading_message = await update.message.reply_text(
-        f"🔍 Searching for: {anime_name}\n"
-        "⏳ Seasons, series aur Hindi availability check ho rahi hai..." 
+    loading = await update.message.reply_text(
+        "🔎 <b>Searching...</b>\n"
+        f"🎬 {html.escape(anime_name)}\n\n"
+        "⏳ Sources check kiye ja rahe hain...",
+        parse_mode="HTML",
     )
 
     try:
-        # ----------------------------------------------------
-        # Fetch information from anime_scraper.py
-        # ----------------------------------------------------
+        result = await fetch_anime_text(anime_name)
 
-        anime_info = get_anime_info(anime_name)
-
-        # ----------------------------------------------------
-        # Delete loading message
-        # ----------------------------------------------------
-
-        try:
-            await loading_message.delete()
-        except Exception as exc:
-            logger.debug(
-                f"Could not delete loading message: {exc}"
-            )
-
-        # ----------------------------------------------------
-        # No result
-        # ----------------------------------------------------
-
-        if not anime_info:
-            await update.message.reply_text(
-                f"😕 Anime not found:\n"
-                f"{anime_name}\n\n"
-                "Try:\n"
-                "• Another spelling\n"
-                "• English title\n"
-                "• Short/common title\n"
-                "• Add Movie if it is a movie"
-            )
-
-            logger.info(
-                f"Anime not found: {anime_name}"
+        if not result:
+            await loading.edit_text(
+                "❌ <b>Anime nahi mila.</b>\n\n"
+                "Anime ka naam dobara check karo.",
+                parse_mode="HTML",
             )
             return
 
-        # ----------------------------------------------------
-        # Send result
-        # ----------------------------------------------------
-
-        await send_anime_with_poster(
-            update,
-            anime_info,
+        await loading.edit_text(
+            result,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
-        logger.info(
-            f"Successfully returned anime info: {anime_name}"
-        )
+    except Exception:
+        logger.exception("Anime command error")
 
-    except Exception as exc:
-        logger.exception(
-            f"Error processing anime command "
-            f"for '{anime_name}': {exc}"
-        )
-
-        try:
-            await loading_message.delete()
-        except Exception:
-            pass
-
-        await update.message.reply_text(
-            "❌ Error: Unable to fetch anime information.\n\n"
-            "Ye temporary problem ho sakti hai.\n"
-            "Thodi der baad dobara try karo."
+        await loading.edit_text(
+            "⚠️ <b>Something went wrong.</b>\n\n"
+            "Thodi der baad dobara try karo.",
+            parse_mode="HTML",
         )
 
 
-# ============================================================
-# SEND ANIME INFORMATION
-# ============================================================
-
-async def send_anime_with_poster(
+async def today_command(
     update: Update,
-    anime_info: Any,
-) -> None:
-    """Send poster + formatted anime information in Telegram."""
+    context: ContextTypes.DEFAULT_TYPE,
+):
     if not update.message:
         return
 
+    loading = await update.message.reply_text(
+        "🔎 <b>Today's anime releases check kar raha hoon...</b>",
+        parse_mode="HTML",
+    )
+
     try:
-        if isinstance(anime_info, AnimeInfo):
-            # anime_scraper.py now returns franchise-aware AnimeInfo for
-            # Naruto / Dragon Ball and normal AnimeInfo for other anime.
-            # format_anime_info() handles both formats.
-            poster_url = anime_info.poster_url
-            caption = get_scraper().format_result(anime_info)
-        elif isinstance(anime_info, dict):
-            poster_url = anime_info.get("poster") or anime_info.get("poster_url")
-            caption = _format_dict_anime_info(anime_info)
-        else:
-            await update.message.reply_text("❌ Invalid anime information received.")
+        releases = await fetch_today_releases()
+
+        if not releases:
+            await loading.edit_text(
+                "📅 <b>TODAY'S ANIME UPDATES</b>\n\n"
+                "ℹ️ Aaj ke verified releases nahi mile.",
+                parse_mode="HTML",
+            )
             return
 
-        if not caption or not caption.strip():
-            await update.message.reply_text("❌ Anime information empty aa rahi hai.")
-            return
-
-        # Telegram photo caption limit is 1024 characters.
-        if poster_url and _is_valid_url(poster_url):
-            try:
-                if len(caption) <= 1024:
-                    await update.message.reply_photo(photo=poster_url, caption=caption)
-                    return
-
-                split_at = caption.rfind("\n", 0, 1000)
-                if split_at <= 0:
-                    split_at = 1000
-                await update.message.reply_photo(
-                    photo=poster_url,
-                    caption=caption[:split_at],
-                )
-                caption = caption[split_at:].lstrip()
-            except Exception as exc:
-                logger.warning(f"Poster + caption failed: {exc}")
-
-        # If there is no valid poster, or caption continued after the photo,
-        # send the remaining text normally.
-        while caption:
-            if len(caption) <= 4000:
-                await update.message.reply_text(caption, disable_web_page_preview=True)
-                break
-            split_at = caption.rfind("\n", 0, 4000)
-            if split_at <= 0:
-                split_at = 4000
-            await update.message.reply_text(caption[:split_at], disable_web_page_preview=True)
-            caption = caption[split_at:].lstrip()
-
-    except Exception as exc:
-        logger.exception(f"Error sending anime information: {exc}")
-        try:
-            await update.message.reply_text("❌ Error sending anime information.")
-        except Exception:
-            pass
-
-
-# ============================================================
-# URL VALIDATION
-# ============================================================
-
-def _is_valid_url(url: str) -> bool:
-    """Return True if URL is HTTP/HTTPS."""
-
-    if not isinstance(url, str):
-        return False
-
-    url = url.strip()
-
-    return url.startswith(
-        (
-            "http://",
-            "https://",
-        )
-    )
-
-
-# ============================================================
-# DICT FORMATTER
-# ============================================================
-
-def _format_dict_anime_info(
-    anime_info: dict,
-) -> str:
-    """
-    Backward-compatible formatter for dictionary data.
-
-    This is only used if another part of the bot sends
-    dictionary data instead of AnimeInfo.
-    """
-
-    name = _safe_text(
-        anime_info.get("name"),
-        "Unknown",
-    )
-
-    hindi_dub = _safe_text(
-        anime_info.get("hindi_dub"),
-        "Not Verified",
-    )
-
-    platform = _safe_text(
-        anime_info.get("platform")
-    )
-
-    season = _safe_text(
-        anime_info.get("season")
-        or anime_info.get("seasons")
-    )
-
-    episodes = _safe_text(
-        anime_info.get("episodes")
-    )
-
-    languages = _safe_text(
-        anime_info.get("languages")
-    )
-
-    status = _safe_text(
-        anime_info.get("status")
-    )
-
-    last_episode = _safe_text(
-        anime_info.get("last_episode")
-    )
-
-    last_release = _safe_text(
-        anime_info.get("last_release")
-    )
-
-    next_episode = _safe_text(
-        anime_info.get("next_episode")
-    )
-
-    expected_release = _safe_text(
-        anime_info.get("expected_release")
-    )
-
-    schedule = _safe_text(
-        anime_info.get("schedule")
-    )
-
-    studio = _safe_text(
-        anime_info.get("studio")
-    )
-
-    dub_by = _safe_text(
-        anime_info.get("dub_by")
-    )
-
-    source = _safe_text(
-        anime_info.get("source"),
-        "DC",
-    )
-
-    lines = [
-        f"🎬 Anime: {name}",
-        "",
-        f"🇮🇳 Hindi Dub: {hindi_dub}",
-    ]
-
-    if platform:
-        lines.append(
-            f"📺 Platform: {platform}"
-        )
-
-    if season:
-        lines.append(
-            f"📀 Season: {season}"
-        )
-
-    if episodes:
-        lines.append(
-            f"🎬 Episodes: {episodes}"
-        )
-
-    if languages:
-        lines.extend(
-            [
-                "",
-                f"🌐 Languages: {languages}",
-            ]
-        )
-
-    if status:
-        lines.extend(
-            [
-                "",
-                f"📊 Status: {status}",
-            ]
-        )
-
-    if last_episode:
-        lines.append(
-            f"📅 Last Episode: {last_episode}"
-        )
-
-    if last_release:
-        lines.append(
-            f"🗓 Last Release: {last_release}"
-        )
-
-    if next_episode:
-        lines.append(
-            f"⏭ Next Episode: {next_episode}"
-        )
-
-    if expected_release:
-        lines.append(
-            f"📅 Expected Release: {expected_release}"
-        )
-
-    if schedule:
-        lines.append(
-            f"⏰ Schedule: {schedule}"
-        )
-
-    if studio:
-        lines.extend(
-            [
-                "",
-                f"🏢 Studio: {studio}",
-            ]
-        )
-
-    if dub_by:
-        lines.append(
-            f"🎙 Dub By: {dub_by}"
-        )
-
-    lines.extend(
-        [
+        lines = [
+            "📅 <b>TODAY'S ANIME UPDATES</b>",
+            "━━━━━━━━━━━━━━━━━━",
             "",
-            f"🔎 Source: {source}",
         ]
-    )
 
-    return "\n".join(lines)
+        for index, item in enumerate(releases, start=1):
+            anime = html.escape(
+                str(item.get("anime", "Unknown"))
+            )
+            episode = item.get("episode") or "Unknown"
+            languages = item.get("language", [])
+            platform = item.get("platform") or "Unknown"
+            release_time = item.get("time") or "Time not verified"
 
+            if isinstance(languages, list):
+                language_text = (
+                    " • ".join(map(str, languages))
+                    if languages
+                    else "Unknown"
+                )
+            else:
+                language_text = str(languages)
 
-# ============================================================
-# SAFE TEXT
-# ============================================================
+            lines.extend([
+                f"{index}️⃣ <b>{anime}</b>",
+                f"   ├─ 📺 Episode: {html.escape(str(episode))}",
+                f"   ├─ 🌐 Language: {html.escape(language_text)}",
+                f"   ├─ 📡 Platform: {html.escape(str(platform))}",
+                f"   └─ 🕐 Time: {html.escape(str(release_time))}",
+                "",
+            ])
 
-def _safe_text(
-    value: Any,
-    default: str = "",
-) -> str:
-    """Convert value to clean display text."""
+        lines.extend([
+            "━━━━━━━━━━━━━━━━━━",
+            "🇮🇳 Timezone: IST",
+        ])
 
-    if value is None:
-        return default
-
-    if isinstance(value, list):
-        value = " • ".join(
-            str(item)
-            for item in value
-            if item
+        await loading.edit_text(
+            "\n".join(lines),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
-    value = str(value).strip()
+    except Exception:
+        logger.exception("Today command error")
 
-    return value if value else default
+        await loading.edit_text(
+            "⚠️ <b>Today's updates fetch nahi ho paayi.</b>",
+            parse_mode="HTML",
+        )
 
 
+def get_subscriptions(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> set[int]:
+    return context.application.bot_data.setdefault(
+        "subscriptions",
+        set(),
+    )
 
 
+async def subscribe_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.effective_chat:
+        return
+
+    subscriptions = get_subscriptions(context)
+    chat_id = update.effective_chat.id
+
+    if chat_id in subscriptions:
+        await update.message.reply_text(
+            "✅ Is chat me daily anime updates already ON hain."
+        )
+        return
+
+    subscriptions.add(chat_id)
+
+    chat_type = update.effective_chat.type
+
+    if chat_type == ChatType.PRIVATE:
+        target = "DM"
+    elif chat_type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        target = "Group"
+    else:
+        target = "Chat"
+
+    await update.message.reply_text(
+        "✅ <b>Daily Updates ON</b>\n\n"
+        f"📢 {target} me daily anime release updates bheje jayenge.",
+        parse_mode="HTML",
+    )
 
 
+async def unsubscribe_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.effective_chat:
+        return
+
+    subscriptions = get_subscriptions(context)
+    chat_id = update.effective_chat.id
+
+    if chat_id not in subscriptions:
+        await update.message.reply_text(
+            "ℹ️ Is chat me daily updates already OFF hain."
+        )
+        return
+
+    subscriptions.discard(chat_id)
+
+    await update.message.reply_text(
+        "❌ <b>Daily Updates OFF</b>\n\n"
+        "Ab is chat me automatic daily anime updates nahi aayengi.",
+        parse_mode="HTML",
+    )
+
+
+def register_commands(application):
+    """Register all bot commands on a python-telegram-bot Application."""
+
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("anime", anime_command))
+    application.add_handler(CommandHandler("today", today_command))
+    application.add_handler(CommandHandler("subscribe", subscribe_command))
+    application.add_handler(CommandHandler("unsubscribe", unsubscribe_command))
+
+    logger.info("Anime bot commands registered.")
