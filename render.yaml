@@ -1,9 +1,10 @@
 services:
-  - type: worker
+  - type: web
     name: anime-dub-check
     runtime: python
     buildCommand: pip install -r requirements.txt && playwright install --with-deps chromium
     startCommand: python bot.py
+    healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
         sync: false
