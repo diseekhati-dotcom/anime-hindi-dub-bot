@@ -1,8 +1,2 @@
-python-telegram-bot==22.7
-requests==2.31.0
-beautifulsoup4==4.12.2
-lxml==6.1.2
-python-dotenv==1.0.0
-
-aiohttp
-rapidfuzz
+python-telegram-bot[job-queue]>=22,<23
+playwright>=1.55,<2

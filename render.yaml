@@ -1,0 +1,11 @@
+services:
+  - type: worker
+    name: anime-dub-check
+    runtime: python
+    buildCommand: pip install -r requirements.txt && playwright install --with-deps chromium
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: FOLLOW_DB
+        value: follows.json
