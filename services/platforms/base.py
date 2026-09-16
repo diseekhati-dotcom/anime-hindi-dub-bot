@@ -14,14 +14,15 @@ class BasePlatform:
         # return positive availability when platform-owned evidence is visible.
         page = await self.browser.new_page()
         try:
+            page.set_default_timeout(5000)
             query = f'site:{self.domains[0]} "{title}"'
-            await page.goto("https://www.google.com/search?q=" + quote(query), wait_until="domcontentloaded", timeout=20000)
+            await page.goto("https://www.google.com/search?q=" + quote(query), wait_until="domcontentloaded", timeout=8000)
             links = await page.locator("a").evaluate_all("(els) => els.map(e => e.href).filter(Boolean)")
             candidate = next((u for u in links if any(d in u for d in self.domains)), None)
             if not candidate:
                 return self._unknown()
-            await page.goto(candidate, wait_until="domcontentloaded", timeout=25000)
-            text = (await page.locator("body").inner_text(timeout=10000))[:50000]
+            await page.goto(candidate, wait_until="domcontentloaded", timeout=9000)
+            text = (await page.locator("body").inner_text(timeout=5000))[:50000]
             return self.parse(title, text, candidate)
         except Exception as e:
             return self._unknown(str(e))
