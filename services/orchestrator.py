@@ -23,11 +23,19 @@ class BrowserManager:
     def __init__(self):
         self.pw = None
         self.browser = None
+        self._lock = asyncio.Lock()
 
     async def start(self):
-        if not self.browser:
+        if self.browser:
+            return
+        async with self._lock:
+            if self.browser:
+                return
             self.pw = await async_playwright().start()
-            self.browser = await self.pw.chromium.launch(headless=True)
+            self.browser = await self.pw.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage", "--no-sandbox"]
+            )
 
     async def stop(self):
         if self.browser: await self.browser.close()
@@ -47,6 +55,14 @@ class AnimeDubChecker:
         self.browser = BrowserManager()
         self.cache = TTLCache(1800)
 
+    async def _check_platform(self, adapter, title, kind):
+        try:
+            return await asyncio.wait_for(adapter.check(title, kind), timeout=14)
+        except asyncio.TimeoutError:
+            return adapter._unknown("Platform check timed out after 14s")
+        except Exception as e:
+            return adapter._unknown(str(e))
+
     async def check(self, title, force=False):
         key = title.strip().lower()
         if not force:
@@ -55,7 +71,9 @@ class AnimeDubChecker:
                 return cached
         resolved = await resolve_title(title)
         result = AnimeResult(title=resolved["title"], kind=resolved["kind"], status="Unknown")
-        tasks = []
+        # Run every platform concurrently. Each adapter gets its own hard
+        # timeout so one blocked site cannot delay the whole response.
+        wrapped = []
         for name, domains in PLATFORMS:
             if name == "Crunchyroll":
                 adapter = Crunchyroll(self.browser)
@@ -63,8 +81,8 @@ class AnimeDubChecker:
                 adapter = GenericPlatform(self.browser)
                 adapter.name = name
                 adapter.domains = domains
-            tasks.append(adapter.check(result.title, result.kind))
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+            wrapped.append(self._check_platform(adapter, result.title, result.kind))
+        results = await asyncio.gather(*wrapped, return_exceptions=True)
         for r in results:
             if not isinstance(r, Exception):
                 result.platforms.append(r)
